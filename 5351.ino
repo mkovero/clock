@@ -73,7 +73,13 @@ static const uint8_t SI_ADDR = 0x60;
 // ---- gating configuration ---------------------------------------------------
 
 static const uint8_t  LOCK_BIT_PIN         = 2;    // AR-40A BIT, active low
-static const uint8_t  STATUS_LED_PIN       = 13;   // Teensy onboard LED
+static const uint8_t  LED_REF_PIN          = 3;    // reference present / usable
+static const uint8_t  LED_LOCK_PIN         = 4;    // AR-40A locked
+static const uint8_t  STATUS_LED_PIN       = 13;   // Teensy onboard, heartbeat
+
+// Teensy 4.0 pins want far less current than a 3.x. Use a high-efficiency LED
+// with ~1k in series (about 1.5 mA at 3.3 V), anode to the pin, cathode to GND.
+// Do not reuse 220R values from AVR-era designs.
 static const uint32_t POLL_INTERVAL_MS     = 250;
 static const uint8_t  GOOD_READS_TO_ENABLE = 4;    // ~1 s of clean status
 static const uint8_t  BAD_READS_TO_DISABLE = 2;    // ignore single-poll blips
@@ -317,7 +323,11 @@ void setup() {
   while (!Serial && millis() < 3000) { }
 
   pinMode(LOCK_BIT_PIN, INPUT_PULLUP);
+  pinMode(LED_REF_PIN, OUTPUT);
+  pinMode(LED_LOCK_PIN, OUTPUT);
   pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(LED_REF_PIN, LOW);
+  digitalWrite(LED_LOCK_PIN, LOW);
   digitalWrite(STATUS_LED_PIN, LOW);
 
   // Wire on the Teensy 4.0 default pins: 18 = SDA, 19 = SCL.
@@ -351,16 +361,34 @@ void loop() {
     if (badRuns >= BAD_READS_TO_DISABLE && DISABLE_ON_LOSS) setClk4(false);
   }
 
-  // LED: solid when the rubidium is locked and CLK4 is live; slow blink when
-  // the reference is present but the AR-40A has not locked (warm-up or
-  // holdover); off when there is no usable reference at all.
-  if (clk4Enabled && locked) {
-    digitalWrite(STATUS_LED_PIN, HIGH);
-  } else if (clk4Enabled) {
-    digitalWrite(STATUS_LED_PIN, (millis() / 500) & 1);
+  // Panel indicators.
+  //
+  //   REF  solid  - CLKIN present and PLLA locked, CLK4 live
+  //        blink  - CLKIN present but PLLA not locked (settling, or a
+  //                 reference the PLL cannot use)
+  //        off    - no signal on CLKIN: cable, DA or AR-40A
+  //
+  //   LOCK solid  - AR-40A reports locked
+  //        off    - warm-up or holdover; the reference is running on the
+  //                 free OCXO and is not yet rubidium-disciplined
+  //
+  // Together: REF off is a broken signal path. REF solid with LOCK off is a
+  // working path on an undisciplined reference.
+  bool slowBlink = (millis() / 500) & 1;
+
+  if (g_losClkin) {
+    digitalWrite(LED_REF_PIN, LOW);
+  } else if (g_lolA) {
+    digitalWrite(LED_REF_PIN, slowBlink);
   } else {
-    digitalWrite(STATUS_LED_PIN, LOW);
+    digitalWrite(LED_REF_PIN, HIGH);
   }
+
+  digitalWrite(LED_LOCK_PIN, locked ? HIGH : LOW);
+
+  // Onboard LED is a heartbeat: proves the firmware is running rather than
+  // hung, which neither panel LED would show.
+  digitalWrite(STATUS_LED_PIN, (millis() / 1000) & 1);
 
   // Print on every BIT state change, and otherwise every 8th poll (~2 s).
   static uint8_t tick = 0;
