@@ -57,7 +57,7 @@ Explicitly **not** a goal: acting as a Dante or AES67 grandmaster.
    `[plan]`                              2.1 Vpp measured
                                          (clamped, see §8)
                                               │
-              Teensy 3.2 ── I2C (18/19) ──────┤
+              Teensy 4.0 ── I2C (18/19) ──────┤
               (BIT lock → pin 2)              │
                                               ▼
                                         CLK4, 8 mA
@@ -96,7 +96,7 @@ isolation from each other. Replaced by the pad plus a DA output per destination.
 
 ---
 
-## 2b. Lock interlock — REMOVED 2026-09-07 `[built]`
+## 2b. Lock interlock — relay removed, replaced in firmware `[built]`
 
 Previously: the AR-40A's BIT pin (DB9 pin 3) drove a relay coil — coil between +V and
 the BIT pin, flyback diode across it — and the relay switched 5 V to the CM4, Teensy
@@ -142,15 +142,39 @@ BIT state at the same time and you get a positive "reference not locked" indicat
 the same information the old relay's LED gave, without the relay, and better than
 inferring it from a Pi that won't boot.
 
-**Replacement, decided 2026-09-08 `[plan]`:** BIT goes to **Teensy GPIO pin 10**,
-`INPUT_PULLUP`, LOW = locked. The Teensy holds CLK4 disabled until lock, then enables
-it, and reports lock state to the CM4. Nothing in the 5 V path.
+**Replacement, decided 2026-09-08, wired 2026-09-09 `[built]`:** BIT goes to **Teensy
+GPIO pin 2**, `INPUT_PULLUP`, LOW = locked. The Teensy gates CLK4 on the Si5351's own
+LOS_CLKIN / LOL_A status and uses BIT for indication only (LED + serial to the CM4),
+so boot is not conditional on the AR-40A's five-minute warm-up. Nothing in the 5 V
+path. Firmware: `5351.ino`.
 
-- BIT is open-collector, so with the internal pull-up no external voltage reaches the
-  pin. (Teensy 3.2 digital pins are 5 V tolerant anyway — it's the 3.5/3.6 and 4.x
-  that aren't.)
+- **Teensy 4.0 pins are NOT 5 V tolerant** — 3.3 V absolute maximum. BIT is open
+  collector and only sinks, so it is safe *provided nothing else is on that line*.
+  The old interlock had a relay coil between +V and BIT; if any of that wiring
+  remains, an open BIT is pulled up through the coil to the relay supply and will
+  destroy the input. **Verify the coil is out of circuit before powering.**
 - 1 kΩ in series at the pin for ESD, 100 nF pin-to-ground to keep RF off it.
-- Pin 10 is also SPI0 CS on a Teensy 3.2 — leave it free if SPI is ever wanted.
+- Pin 2 chosen because it has no alternate peripheral function on a Teensy 4.0.
+  Pin 10 was considered first but is SPI CS.
+
+**Panel LEDs, wired 2026-09-09 `[built]`:** yellow on pin 3 = REF (solid when CLKIN
+present and PLLA locked, blink while the PLL settles, off when there is no signal);
+red on pin 4 = LOCK (on when the AR-40A reports locked). Onboard pin 13 is a
+heartbeat. Both LEDs run at ~1.5 mA through 1 kΩ — Teensy 4.0 pins default to about
+4 mA drive and should not be pushed. Measured Vf: yellow 1.82 V, red 1.794 V.
+
+Wiring: one 2-conductor shielded multicore strand — the two conductors carry the
+anodes, the shield is the common cathode return to Teensy ground. Resistors at the
+Teensy end. The shield must not also touch the chassis; here it is a conductor, not
+a shield, and bonding it to the enclosure would create the loop §5 avoids.
+
+Together the two LEDs distinguish the failure modes the old relay's single LED could
+not: REF off means a broken signal path (cable, DA or AR-40A); REF solid with LOCK
+off means a working path running on an undisciplined free OCXO.
+
+Note the colour convention is inverted from habit — red lit means *good* here. An
+alternative is to drive LOCK inverted so red means "unlocked or in holdover", making
+a dark panel plus yellow the healthy state.
 
 **Optocoupler: not needed — earlier advice in this document was wrong.** The rule
 about second inter-domain paths is about *low-impedance* ones: a shield bond is
@@ -260,7 +284,7 @@ Note: every Orion clock mode disciplines the same internal OCXO. The advantage o
 10M over word clock is the multiplication ratio (~×2.26 vs ×512), i.e. far less
 phase-noise amplification. 10M is the right input to use.
 
-### Si5351C-B breakout + Teensy 3.2
+### Si5351C-B breakout + Teensy 4.0
 | Parameter | Value | Src |
 |---|---|---|
 | CLKIN V_IL | max 0.3 × VDD (0.99 V @ 3.3 V) | `[spec]` |
@@ -531,6 +555,46 @@ Costs a second output or splitter at the rubidium.
 
 ---
 
+## 6b. ZED-F9T wiring — decided and outstanding
+
+Consolidated here because this is the next work item.
+
+**Decided:**
+
+- **TIME1 → CM4 stays internal and direct.** Both boards are in the same enclosure;
+  routing a PPS edge out to a bulkhead and back in adds connectors and shield
+  decisions to a path that wants to be short. Miniature coax (RG-178 or 1.13 mm),
+  centre to TIME1, shield to a GND pin on the F9T header and to CM4 ground at the far
+  end, **33–47 Ω series at the F9T end**, receiver high-Z. Do not shunt-terminate —
+  the ZED's CMOS output cannot drive 50 Ω properly. `[plan]`
+- **EXTINT gets a bulkhead connector.** Its source is the planned squarer/divider
+  board (§6), which may live outside this enclosure. Isolated from the chassis,
+  shield to board ground. `[plan]`
+- **Don't hand-wire the USB D+/D− header pins.** A cut USB cable is a real 90 Ω pair
+  with a drain and is acceptable; flying leads are not. `[built]` — the existing link
+  used a normal USB cable, which worked, but grounding was sketchy in several places.
+
+**Outstanding:**
+
+- I/O level: 3.3 V at the module, but whether *this breakout* level-shifts to 5 V is
+  unconfirmed. Check before anything touches CM4 GPIO. `[?]`
+- Data link: fix the USB grounding (cable GND to a header GND pin, short; shield
+  terminated at the CM4 end only) or move to UART. `[?]`
+- Antenna shield bonding point, and surge protection if roof-mounted. `[?]`
+
+**Header pinout** (from the breakout drawing): +5V, GND, RX(2)/TX(2), TIME(2)/TIME(1),
+EXTINT, READY, SCL/SPI_CLK, SDA/SPI_CS, USB D−/D+, RX/SPI_MOSI, TX/SPI_MISO. A SEL pad
+selects UART+I²C vs SPI. TIME(1) = TIMEPULSE1 = 1 PPS by default. The +5V and GND pins
+are diagonally adjacent rather than in a row — verify against the physical board before
+committing.
+
+**Consolidation worth considering:** if the squarer/divider board, the Si5351 and the
+Teensy all end up in this same enclosure, then EXTINT becomes internal too and the only
+things crossing the panel are 10 MHz in, 5 V in, 54 MHz out, and USB/UART to the CM4.
+Every fast edge stays on one ground plane, which makes most of §5 stop mattering.
+
+---
+
 ## 7. Open items
 
 Ordered by what blocks what.
@@ -553,44 +617,70 @@ Ordered by what blocks what.
 - ~~**Verify supply rails.**~~ 2026-09-09: all four within 23 mV, CM4 at 4.917 V
   booted (§5).
 
+- ~~**Flash and verify the gating firmware.**~~ 2026-09-09: running. CLK4 gated on
+  LOS_CLKIN / LOL_A; verified against a real AR-40A power cycle — reference lost,
+  sticky 0xF0 confirming the drop was genuine, CLK4 disabled, then re-enabled ~1 s
+  after the signal returned. BIT proven in both directions (LOCKED → UNLOCKED →
+  LOCKED). Warm-up behaviour confirmed: with CLKIN present but BIT unlocked, CLK4
+  stays enabled, so the CM4 is not held off during rubidium pull-in. Panel LEDs
+  wired and working.
+
+  Two bugs found and fixed along the way: a failed I2C read returned 0xFF and was
+  indistinguishable from every fault bit set, so single bus glitches killed CLK4 for
+  a second at a time — now a third state that holds the output; and a single-poll
+  blip could disable, now debounced at two consecutive bad reads.
+
 ### Open — digital side, doable on the bench
 
-1. **Teensy firmware: gate CLK4 on Si5351 status.** Now the priority item. With no
-   CLKIN the part free-runs and emits ~11.6 MHz (§2b), which presents the CM4 with a
-   stable-looking wrong clock rather than none. Poll register 0 (LOS_CLKIN, LOL_A)
-   and hold CLK4 disabled when either is set — periodically, not once at boot. Use
-   BIT on Teensy pin 2 for *indication* (LED + serial to the CM4), not for gating, to
-   avoid reinstating the 5-minute delayed boot. Build on the working Etherkit sketch,
-   not on an untested bare-register rewrite. Do this before the rack move.
-2. **Confirm the F9T breakout's I/O level** is 3.3 V and not shifted to 5 V, before
+1. **I2C bus integrity.** A single poll returned reg0=0xC1 with SYS_INIT apparently
+   set while every other flag and the sticky byte were unchanged — a bit error in
+   transit, not a real event. It did not trip the output only because of the
+   two-read debounce. Note `i2cErr` stays at 0 for these, since the transaction
+   succeeded and only the data was wrong, so the true error rate is higher than the
+   counter shows. Check whether the breakout fits I2C pull-ups; the Teensy 4.0's
+   internal ones are weak and 400 kHz over wire with only those is marginal. Try
+   `Wire.setClock(100000)` — polling is 4 Hz, the rate is irrelevant. A software
+   cross-check is also available: a fault flag set while its sticky counterpart
+   reads clear is self-contradictory and can be rejected. `[?]`
+2. **Cut the Teensy's VUSB pad.** It currently runs from USB alone with the PSUs
+   off, so the pad is intact — connecting USB with the 5 V PSU on would tie the
+   laptop's rail to the whole digital island. Until then, one supply at a time.
+3. **Read back register 20** and confirm it contains 0x4F, to take the firmware out
+   of any future argument about CLK4 drive strength. `[?]`
+4. **Confirm the F9T breakout's I/O level** is 3.3 V and not shifted to 5 V, before
    anything touches CM4 GPIO.
-3. **Decide the F9T data link:** fix USB grounding (cable GND to a header GND pin,
+5. **Decide the F9T data link:** fix USB grounding (cable GND to a header GND pin,
    short; shield terminated at the CM4 end only) or move to UART.
-4. **Bring EXTINT to a bulkhead connector** while the back panel is open; TIME1 to
+6. **Bring EXTINT to a bulkhead connector** while the back panel is open; TIME1 to
    the CM4 stays internal, direct, on miniature coax with 33–47 Ω series at the F9T
    end.
 
 ### Open — needs the rack move, or the AR-40A powered down
 
-5. **Verify a DA output is a clean sine into a real 75 Ω load.** Measured clean
+7. **Verify a DA output is a clean sine into a real 75 Ω load.** Measured clean
    unloaded (§3), which rules out voltage clipping and slew limiting. What is still
    untested is current drive into 75 Ω. *This gates the board design* — if the DA
    sags, the board's input level changes and the Extron's role has to be
    reconsidered. Mitigate by laying out footprints for either 75 Ω or 50 Ω
    termination, jumper-selected, so the board can be ordered without waiting.
-6. **Confirm the Orion's actual AC termination.** Same measurement as item 5: T at
+8. **Confirm the Orion's actual AC termination.** Same measurement as item 7: T at
    the Orion's input, read Vpp with the Orion connected vs disconnected.
    ~1.26 / ~2.5 Vpp means it terminates at 75 Ω.
-7. **AC volts between grounds** — F9T↔CM4, CM4↔Extron chassis. Take the F9T↔CM4
+9. **AC volts between grounds** — F9T↔CM4, CM4↔Extron chassis. Take the F9T↔CM4
    reading with the 10 MHz coax disconnected as well as connected; the difference is
-   the actual size of the earth-path effect.
-8. **Is the AR-40A chassis at mains PE?** Unplugged continuity check, enclosure to
-   inlet earth pin. Determines whether the 10 MHz chain has one earth injection or
-   two (§5).
-9. **Antenna:** confirm where the coax shield is bonded; if roof-mounted, a
-   gas-discharge arrestor at the entry point. A GNSS DC block / galvanic isolator
-   removes a whole class of ground problem, provided it passes the active antenna's
-   bias.
+   the actual size of the earth-path effect. Take these with the laptop on battery
+   or unplugged — a mains-connected laptop adds its own earth path through USB.
+10. **Is the AR-40A chassis at mains PE?** Unplugged continuity check, enclosure to
+    inlet earth pin. Determines whether the 10 MHz chain has one earth injection or
+    two (§5).
+11. **Resolve the CLK4 amplitude discrepancy** (§8): 1.22 Vpp and 3.4 Vpp measured
+    at 54 MHz with the CM4 attached both times. Most likely the scope's 20 MHz
+    bandwidth limit was enabled for the earlier reading. Worth settling, since it
+    determines what the CM4's XIN is actually being fed. `[?]`
+12. **Antenna:** confirm where the coax shield is bonded; if roof-mounted, a
+    gas-discharge arrestor at the entry point. A GNSS DC block / galvanic isolator
+    removes a whole class of ground problem, provided it passes the active antenna's
+    bias.
 
 ### Shopping list
 
@@ -605,10 +695,22 @@ Ordered by what blocks what.
 Kept here so they aren't "fixed" without thought.
 
 - **54 MHz into CM4 XIN at full 3.3 V CMOS swing** through 10 Ω. Crystal inputs
-  generally want ~1 Vpp AC-coupled. Stable for years. For PPS timestamping accuracy
-  this path is close to irrelevant anyway — a few ps of jitter on the CPU clock
-  disappears under interrupt latency. It matters for boot stability and for system
-  clock frequency accuracy at long tau, not for edge capture.
+  generally want ~1 Vpp AC-coupled. Stable for years.
+
+  Measured 2026-09-09: **3.4 Vpp** at CLK4 `[meas]` — full rail plus overshoot from
+  an unterminated line. An earlier reading of 1.22 Vpp / 394 mV rms was taken at a
+  different point or under different loading; it was initially explained as the
+  scope's 100 MHz bandwidth rounding a 54 MHz square, but that cannot account for
+  both figures on the same instrument, so that explanation is withdrawn. The
+  difference is load, not filtering. Worth resolving which probe point gave which,
+  since a genuinely loaded 1.22 Vpp would imply XIN presents a far lower impedance
+  than a crystal input nominally does — likely the internal Pierce amplifier
+  running. `[?]`
+
+  For PPS timestamping accuracy this path is close to irrelevant anyway — a few ps
+  of jitter on the CPU clock disappears under interrupt latency. It matters for boot
+  stability and for system clock frequency accuracy at long tau, not for edge
+  capture.
 - **AR-40A into the Extron at 3.02 Vpp** vs 1.5 Vpp max. Being fixed by the pad.
 - **Zero-centred sine into Si5351 CLKIN — CONFIRMED BY MEASUREMENT 2026-09-09.**
   `[meas]` Fed 2.49 Vpp unterminated from a DA output, CLKIN measures **2.1 Vpp /
