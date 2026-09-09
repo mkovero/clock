@@ -13,6 +13,16 @@
 // I2C address 0x60. The C variant has no A0 pin, so the address is fixed.
 // Teensy 4.0: SDA = pin 18, SCL = pin 19 (Wire default routing), 3.3 V logic.
 //
+// Serial1 (pin 0 = RX1, pin 1 = TX1) carries the same status text as the USB
+// console to the CM4, 115200 8N1:
+//
+//   Teensy pin 1 (TX1) -> CM4 40-pin header pin 33 (GPIO13, RXD5)
+//   Teensy pin 0 (RX1) <- CM4 40-pin header pin 32 (GPIO12, TXD5)
+//   Teensy GND         -- CM4 40-pin header pin 34
+//
+// Needs dtoverlay=uart5 in the CM4's config.txt; the port is /dev/ttyAMA5.
+// Nothing is read from RX1 yet - it is wired for a future command channel.
+//
 // !! Teensy 4.0 pins are NOT 5 V tolerant. 3.3 V is the absolute maximum on
 // !! any input. The AR-40A's BIT pin is open collector and only ever sinks, so
 // !! it is safe on its own - but ONLY if nothing else is on that line. The old
@@ -67,6 +77,33 @@
 // -----------------------------------------------------------------------------
 
 #include <Wire.h>
+
+// ---- logging ----------------------------------------------------------------
+//
+// Everything the sketch reports goes to BOTH the USB console and Serial1
+// (pins 0 = RX1, 1 = TX1), which runs to the CM4's ttyAMA5 on GPIO12/13.
+// USB is for the bench; Serial1 is the permanent link and is what the CM4
+// logs. Writing to a USB port with no host attached is harmless on a
+// Teensy 4.0 - the guard below just avoids the work.
+//
+// Defined here, above the first function, so the .ino preprocessor's
+// generated prototypes land after the type rather than before it.
+
+class DualPrint : public Print {
+public:
+  size_t write(uint8_t c) override {
+    Serial1.write(c);
+    if (Serial) Serial.write(c);
+    return 1;
+  }
+  size_t write(const uint8_t *buf, size_t n) override {
+    Serial1.write(buf, n);
+    if (Serial) Serial.write(buf, n);
+    return n;
+  }
+};
+
+static DualPrint Log;
 
 static const uint8_t SI_ADDR = 0x60;
 
@@ -289,37 +326,38 @@ static void setClk4(bool on) {
     siWrite(177, 0x20);
     delay(2);
     siWrite(3, OE_CLK4_ONLY);
-    Serial.print("CLK4: ENABLED  (54 MHz to CM4)  reg0=0x");
-    Serial.println(g_reg0, HEX);
+    Log.print("CLK4: ENABLED  (54 MHz to CM4)  reg0=0x");
+    Log.println(g_reg0, HEX);
   } else {
     siWrite(3, OE_ALL_OFF);
-    Serial.print("CLK4: DISABLED (reference lost - CM4 has no clock)  reg0=0x");
-    Serial.print(g_reg0, HEX);
-    Serial.print(" sticky=0x");
-    Serial.println(g_sticky, HEX);
+    Log.print("CLK4: DISABLED (reference lost - CM4 has no clock)  reg0=0x");
+    Log.print(g_reg0, HEX);
+    Log.print(" sticky=0x");
+    Log.println(g_sticky, HEX);
   }
   clk4Enabled = on;
 }
 
 static void report(bool rbLocked) {
-  Serial.print("reg0=0x");     Serial.print(g_reg0, HEX);
-  Serial.print(" LOL_A=");     Serial.print(g_lolA);
-  Serial.print(" LOS_CLKIN="); Serial.print(g_losClkin);
-  Serial.print(" sticky=0x");  Serial.print(g_sticky, HEX);
-  Serial.print(" Rb=");        Serial.print(rbLocked ? "LOCKED" : "UNLOCKED");
-  Serial.print(" CLK4=");      Serial.print(clk4Enabled ? "on" : "off");
-  Serial.print(" i2cErr=");    Serial.println(g_commErrs);
+  Log.print("reg0=0x");     Log.print(g_reg0, HEX);
+  Log.print(" LOL_A=");     Log.print(g_lolA);
+  Log.print(" LOS_CLKIN="); Log.print(g_losClkin);
+  Log.print(" sticky=0x");  Log.print(g_sticky, HEX);
+  Log.print(" Rb=");        Log.print(rbLocked ? "LOCKED" : "UNLOCKED");
+  Log.print(" CLK4=");      Log.print(clk4Enabled ? "on" : "off");
+  Log.print(" i2cErr=");    Log.println(g_commErrs);
 
-  if (!g_commOk)  Serial.println("  !! I2C read failed (output state held)");
-  if (g_losClkin) Serial.println("  !! no signal on CLKIN");
-  if (g_lolA)     Serial.println("  !! PLLA not locked");
-  if (!rbLocked)  Serial.println("  !! AR-40A unlocked or in holdover");
+  if (!g_commOk)  Log.println("  !! I2C read failed (output state held)");
+  if (g_losClkin) Log.println("  !! no signal on CLKIN");
+  if (g_lolA)     Log.println("  !! PLLA not locked");
+  if (!rbLocked)  Log.println("  !! AR-40A unlocked or in holdover");
 }
 
 // -----------------------------------------------------------------------------
 
 void setup() {
-  Serial.begin(115200);
+  Serial1.begin(115200);     // pins 0/1 -> CM4 ttyAMA5 (GPIO12/13)
+  Serial.begin(115200);      // USB, bench only
   while (!Serial && millis() < 3000) { }
 
   pinMode(LOCK_BIT_PIN, INPUT_PULLUP);
@@ -336,12 +374,12 @@ void setup() {
   delay(10);
 
   if (!si5351Init()) {
-    Serial.println("Si5351 not responding at 0x60");
+    Log.println("Si5351 not responding at 0x60");
     return;
   }
 
-  Serial.println("Si5351C: CLKIN 10 MHz -> PLLA 864 MHz -> CLK4 54 MHz");
-  Serial.println("CLK4 gated on LOS_CLKIN / LOL_A. BIT on pin 2 = indication only.");
+  Log.println("Si5351C: CLKIN 10 MHz -> PLLA 864 MHz -> CLK4 54 MHz");
+  Log.println("CLK4 gated on LOS_CLKIN / LOL_A. BIT on pin 2 = indication only.");
 }
 
 void loop() {
