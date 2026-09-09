@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 // Si5351C-B (20-QFN) driven from an external 10 MHz reference
 //
-//   CLKIN  = 10.000 MHz  (AccuBeat AR-40A rubidium, AC coupled + VDD/2 bias)
+//   CLKIN  = 10.000 MHz  (AccuBeat AR-40A rubidium)
 //   CLK4   = 54.000 MHz  (Raspberry Pi CM4 / BCM2711 reference)
 //
 //   PLLA = 10 MHz x 86.4      = 864.000 MHz   VCO, inside 600-900 MHz
@@ -11,42 +11,100 @@
 //   86.4 = 86 + 2/5  -> fractional feedback, denominator 5, spurs at 2 MHz offset
 //
 // I2C address 0x60. The C variant has no A0 pin, so the address is fixed.
-// Teensy 3.2: SDA = pin 18, SCL = pin 19, native 3.3 V logic (default I2C0
-//             routing, as used by the original Etherkit-based firmware).
-//             Pins 16/17 are the alternate routing of the SAME peripheral;
-//             if you ever move to them, call setSCL/setSDA before begin().
+// Teensy 4.0: SDA = pin 18, SCL = pin 19 (Wire default routing), 3.3 V logic.
+//
+// !! Teensy 4.0 pins are NOT 5 V tolerant. 3.3 V is the absolute maximum on
+// !! any input. The AR-40A's BIT pin is open collector and only ever sinks, so
+// !! it is safe on its own - but ONLY if nothing else is on that line. The old
+// !! interlock had a relay coil between +V and BIT; if any of that wiring
+// !! remains, an open BIT gets pulled up through the coil to the relay supply
+// !! and will destroy the input. Verify the coil is out of circuit.
 //
 // CLK4 drive strength is 8 mA (0x4F), matching the Etherkit library default
 // that this board has been running with. Use 0x4C for 2 mA if you ever want
 // to reduce the swing at the BCM2711 crystal pin.
-// Pull-ups: 1k - 2.2k to 3.3 V (check whether the breakout already fits them).
 //
 // Register usage follows AN619 (10-MSOP / 20-QFN devices).
+//
+// -----------------------------------------------------------------------------
+// CLK4 OUTPUT GATING
+//
+// Measured behaviour with no CLKIN present: the PLL loop opens, the charge pump
+// rails, the VCO parks around 186 MHz and MS4's /16 emits a stable ~11.6 MHz.
+// The CM4 is then presented with a plausible-looking clock at a fifth of
+// nominal; its internal PLLs never lock and it sits with power and green LEDs
+// on, doing nothing. That is a bad failure mode to diagnose cold.
+//
+// So CLK4 is held disabled unless the Si5351's own status says the reference
+// is good:
+//
+//   reg 0 bit 4  LOS_CLKIN   no signal on CLKIN
+//   reg 0 bit 5  LOL_A       PLLA not locked
+//
+// THREE states, not two. An I2C read failure is NOT a reference failure and
+// must not change the output state:
+//
+//   comm failed        -> hold whatever CLK4 was doing, count the error
+//   reference bad      -> disable after BAD_READS_TO_DISABLE consecutive polls
+//   reference good     -> enable after GOOD_READS_TO_ENABLE consecutive polls
+//
+// The first version of this sketch returned 0xFF from a failed read, which is
+// indistinguishable from a register with every fault bit set. Single bus
+// glitches therefore killed the CM4's clock for a second at a time. The tell
+// was the sticky register: reg 1 read 0xC0 throughout, i.e. LOL_A_STKY and
+// LOS_CLKIN_STKY never latched, proving the reference had not actually
+// dropped.
+//
+// The AR-40A's BIT (lock) pin arrives on LOCK_BIT_PIN and is used for
+// INDICATION ONLY, not for gating. Gating on BIT would reinstate the old
+// relay's five-minute delayed boot, because during warm-up CLKIN is present
+// (free-running OCXO) while BIT still reads unlocked.
+//
+// BIT is open collector, active low = locked. Confirmed empirically: the
+// original interlock energised a relay coil from this pin and the rig powered
+// up after lock. (The AR-40A manual contradicts itself on this: section 2.1.2
+// is right, section 3.3 has its labels swapped.)
 // -----------------------------------------------------------------------------
 
 #include <Wire.h>
 
 static const uint8_t SI_ADDR = 0x60;
 
+// ---- gating configuration ---------------------------------------------------
+
+static const uint8_t  LOCK_BIT_PIN         = 2;    // AR-40A BIT, active low
+static const uint8_t  STATUS_LED_PIN       = 13;   // Teensy onboard LED
+static const uint32_t POLL_INTERVAL_MS     = 250;
+static const uint8_t  GOOD_READS_TO_ENABLE = 4;    // ~1 s of clean status
+static const uint8_t  BAD_READS_TO_DISABLE = 2;    // ignore single-poll blips
+
+// Set false to make a genuine loss of CLKIN report only, leaving CLK4 running
+// at whatever the free-running VCO produces. Default true: a stopped CM4 is
+// more diagnosable than one running at the wrong frequency.
+static const bool     DISABLE_ON_LOSS      = true;
+
 // ---- frequency plan ---------------------------------------------------------
-// PLLA feedback multiplier: a + b/c
+
 static const uint32_t PLLA_A = 86;
 static const uint32_t PLLA_B = 2;
 static const uint32_t PLLA_C = 5;
 
-// MultiSynth 4 divider: a + b/c  (b = 0 -> integer mode)
 static const uint32_t MS4_A = 16;
 static const uint32_t MS4_B = 0;
 static const uint32_t MS4_C = 1;
 
 // CLK4 control byte, register 20:
-//   bit 7   CLK4_PDN   = 0   powered up
-//   bit 6   MS4_INT    = 1   integer mode (MS4_B == 0)
-//   bit 5   MS4_SRC    = 0   PLLA
-//   bit 4   CLK4_INV   = 0
-//   bit 3:2 CLK4_SRC   = 11  MultiSynth 4
-//   bit 1:0 CLK4_IDRV  = 11  8 mA  (use 0x4C for 2 mA)
+//   bit 7    CLK4_PDN  = 0   powered up
+//   bit 6    MS4_INT   = 1   integer mode (MS4_B == 0)
+//   bit 5    MS4_SRC   = 0   PLLA
+//   bit 4    CLK4_INV  = 0
+//   bit 3:2  CLK4_SRC  = 11  MultiSynth 4
+//   bit 1:0  CLK4_IDRV = 11  8 mA (use 0x4C for 2 mA)
 static const uint8_t CLK4_CTRL = 0x4F;
+
+// Register 3, output enable. 0 = enabled, bit n = CLKn.
+static const uint8_t OE_ALL_OFF   = 0xFF;
+static const uint8_t OE_CLK4_ONLY = 0xEF;
 
 // ---- low level --------------------------------------------------------------
 
@@ -64,18 +122,29 @@ static bool siWriteBurst(uint8_t reg, const uint8_t *buf, uint8_t n) {
   return Wire.endTransmission() == 0;
 }
 
+// Returns false if the transaction itself failed, separately from the data.
+// One retry, because a NACK is usually transient.
+static bool siReadOk(uint8_t reg, uint8_t &val) {
+  for (uint8_t attempt = 0; attempt < 2; attempt++) {
+    Wire.beginTransmission(SI_ADDR);
+    Wire.write(reg);
+    if (Wire.endTransmission() != 0) continue;
+    Wire.requestFrom((int)SI_ADDR, 1);
+    if (Wire.available()) { val = Wire.read(); return true; }
+  }
+  return false;
+}
+
+// Init-time convenience wrapper; failure is handled by surrounding timeouts.
 static uint8_t siRead(uint8_t reg) {
-  Wire.beginTransmission(SI_ADDR);
-  Wire.write(reg);
-  if (Wire.endTransmission() != 0) return 0xFF;
-  Wire.requestFrom((int)SI_ADDR, 1);
-  return Wire.available() ? Wire.read() : 0xFF;
+  uint8_t v;
+  return siReadOk(reg, v) ? v : 0xFF;
 }
 
 // ---- parameter encoding (AN619 section 3.2) ---------------------------------
-// P1 = 128*a + floor(128*b/c) - 512
-// P2 = 128*b - c*floor(128*b/c)
-// P3 = c
+//   P1 = 128*a + floor(128*b/c) - 512
+//   P2 = 128*b - c*floor(128*b/c)
+//   P3 = c
 
 static void encodeParams(uint32_t a, uint32_t b, uint32_t c,
                          uint32_t &p1, uint32_t &p2, uint32_t &p3) {
@@ -89,27 +158,23 @@ static void encodeParams(uint32_t a, uint32_t b, uint32_t c,
 static void setPllA(uint32_t a, uint32_t b, uint32_t c) {
   uint32_t p1, p2, p3;
   encodeParams(a, b, c, p1, p2, p3);
-
   uint8_t r[8];
   r[0] = (p3 >> 8) & 0xFF;
   r[1] =  p3       & 0xFF;
   r[2] = (p1 >> 16) & 0x03;
-  r[3] = (p1 >> 8) & 0xFF;
-  r[4] =  p1       & 0xFF;
+  r[3] = (p1 >> 8)  & 0xFF;
+  r[4] =  p1        & 0xFF;
   r[5] = ((p3 >> 12) & 0xF0) | ((p2 >> 16) & 0x0F);
   r[6] = (p2 >> 8) & 0xFF;
   r[7] =  p2       & 0xFF;
-
   siWriteBurst(26, r, 8);
 }
 
 // Output MultiSynth 0..5, registers 42 + 8*index
-// rdiv: 0 = /1, 1 = /2, 2 = /4 ... 7 = /128
 static void setMultiSynth(uint8_t index, uint32_t a, uint32_t b, uint32_t c,
                           uint8_t rdiv) {
   uint32_t p1, p2, p3;
   encodeParams(a, b, c, p1, p2, p3);
-
   uint8_t r[8];
   r[0] = (p3 >> 8) & 0xFF;
   r[1] =  p3       & 0xFF;
@@ -119,7 +184,6 @@ static void setMultiSynth(uint8_t index, uint32_t a, uint32_t b, uint32_t c,
   r[5] = ((p3 >> 12) & 0xF0) | ((p2 >> 16) & 0x0F);
   r[6] = (p2 >> 8) & 0xFF;
   r[7] =  p2       & 0xFF;
-
   siWriteBurst(42 + 8 * index, r, 8);
 }
 
@@ -132,25 +196,19 @@ static bool si5351Init() {
     if (millis() - t0 > 100) return false;   // no device / stuck on SYS_INIT
   }
 
-  // 1. Disable all outputs.
-  siWrite(3, 0xFF);
+  siWrite(3, OE_ALL_OFF);                    // 1. all outputs off
+  for (uint8_t r = 16; r <= 23; r++) siWrite(r, 0x80);   // 2. drivers down
 
-  // 2. Power down all output drivers.
-  for (uint8_t r = 16; r <= 23; r++) siWrite(r, 0x80);
-
-  // 3. Ignore the OEB pin for every output. Without this a floating OEB
-  //    can hold the outputs disabled - the pin has no internal pull-up.
+  // 3. Ignore the OEB pin for every output. Without this a floating OEB can
+  //    hold the outputs disabled - the pin has no internal pull-up.
   siWrite(9, 0xFF);
 
-  // 4. Input source: CLKIN divided by 1 (10 MHz is under the 30 MHz PLL
-  //    input limit), both PLLs referenced to CLKIN rather than the crystal.
-  //      bit 7:6 CLKIN_DIV = 00  (/1)
-  //      bit 3   PLLB_SRC  = 1   (CLKIN)
-  //      bit 2   PLLA_SRC  = 1   (CLKIN)
+  // 4. Input source: CLKIN divided by 1 (10 MHz is under the 30 MHz PLL input
+  //    limit), both PLLs referenced to CLKIN rather than the crystal.
   siWrite(15, 0x0C);
 
-  // 5. Crystal load capacitance. Harmless if no crystal is fitted; the low
-  //    six bits are reserved and must be written as 010010b.
+  // 5. Crystal load capacitance. Harmless with no crystal fitted; the low six
+  //    bits are reserved and must be written as 010010b.
   siWrite(183, 0xD2);
 
   // 6. Interrupt masks: watch LOS_CLKIN and LOL_A, ignore LOL_B (PLLB unused)
@@ -161,48 +219,95 @@ static bool si5351Init() {
   setPllA(PLLA_A, PLLA_B, PLLA_C);
   setMultiSynth(4, MS4_A, MS4_B, MS4_C, 0);
 
-  // 8. Zero phase offset on CLK4 (register 165 + n).
-  siWrite(169, 0x00);
-
-  // 9. Bring up the CLK4 driver.
-  siWrite(20, CLK4_CTRL);
-
-  // 10. Soft reset PLLA only. Resetting both (0xAC) would glitch every
-  //     output on PLLB too - relevant once you add more clocks.
-  siWrite(177, 0x20);
-
+  siWrite(169, 0x00);        // 8. zero phase offset on CLK4 (reg 165 + n)
+  siWrite(20, CLK4_CTRL);    // 9. CLK4 driver up, still gated off at reg 3
+  siWrite(177, 0x20);        // 10. soft reset PLLA only
   delay(2);
 
-  // 11. Enable CLK4, leave the rest disabled (0 = enabled, bit n = CLKn).
-  siWrite(3, 0xEF);
+  // 11. Outputs stay DISABLED here. The gating loop enables CLK4 once status
+  //     has been clean for GOOD_READS_TO_ENABLE polls.
 
-  // Clear sticky status bits so the first read reflects the present state.
-  siWrite(1, 0x00);
-
+  siWrite(1, 0x00);          // clear sticky bits
   return true;
 }
 
 // ---- status -----------------------------------------------------------------
+//
+// Deliberately no struct. The Arduino .ino preprocessor inserts generated
+// function prototypes above user type definitions, so a function returning a
+// locally-declared struct fails with "does not name a type".
 
-static void printStatus() {
-  uint8_t s = siRead(0);
-  uint8_t k = siRead(1);
+static uint8_t  g_reg0     = 0xFF;
+static uint8_t  g_sticky   = 0x00;
+static bool     g_sysInit  = true;
+static bool     g_lolA     = true;
+static bool     g_losClkin = true;
+static bool     g_refGood  = false;
+static bool     g_commOk   = false;
+static uint32_t g_commErrs = 0;
 
-  Serial.print("reg0=0x");
-  Serial.print(s, HEX);
-  Serial.print("  SYS_INIT=");
-  Serial.print((s >> 7) & 1);
-  Serial.print("  LOL_A=");
-  Serial.print((s >> 5) & 1);
-  Serial.print("  LOS_CLKIN=");
-  Serial.print((s >> 4) & 1);
-  Serial.print("  LOS_XTAL=");
-  Serial.print((s >> 3) & 1);
-  Serial.print("   sticky=0x");
-  Serial.println(k, HEX);
+static void readStatus() {
+  uint8_t r0, r1;
+  g_commOk = siReadOk(0, r0) && siReadOk(1, r1);
+  if (!g_commOk) {
+    g_commErrs++;
+    return;                  // leave previous flags alone; caller holds state
+  }
+  g_reg0     = r0;
+  g_sticky   = r1;
+  g_sysInit  = (g_reg0 >> 7) & 1;
+  g_lolA     = (g_reg0 >> 5) & 1;
+  g_losClkin = (g_reg0 >> 4) & 1;
+  g_refGood  = !g_sysInit && !g_lolA && !g_losClkin;
+  siWrite(1, 0x00);          // clear sticky so the next read is fresh
+}
 
-  if ((s >> 4) & 1) Serial.println("  !! no signal on CLKIN");
-  if ((s >> 5) & 1) Serial.println("  !! PLLA not locked");
+static bool rubidiumLocked() {
+  // BIT is open collector, pulled low when locked.
+  return digitalRead(LOCK_BIT_PIN) == LOW;
+}
+
+// ---- gating state -----------------------------------------------------------
+
+static bool    clk4Enabled  = false;
+static uint8_t goodRuns     = 0;
+static uint8_t badRuns      = 0;
+static bool    lastRbLocked = false;
+static bool    firstReport  = true;
+
+static void setClk4(bool on) {
+  if (on == clk4Enabled) return;
+  if (on) {
+    // Re-lock cleanly before letting the output out: a PLL that has just
+    // reacquired its reference benefits from a soft reset.
+    siWrite(177, 0x20);
+    delay(2);
+    siWrite(3, OE_CLK4_ONLY);
+    Serial.print("CLK4: ENABLED  (54 MHz to CM4)  reg0=0x");
+    Serial.println(g_reg0, HEX);
+  } else {
+    siWrite(3, OE_ALL_OFF);
+    Serial.print("CLK4: DISABLED (reference lost - CM4 has no clock)  reg0=0x");
+    Serial.print(g_reg0, HEX);
+    Serial.print(" sticky=0x");
+    Serial.println(g_sticky, HEX);
+  }
+  clk4Enabled = on;
+}
+
+static void report(bool rbLocked) {
+  Serial.print("reg0=0x");     Serial.print(g_reg0, HEX);
+  Serial.print(" LOL_A=");     Serial.print(g_lolA);
+  Serial.print(" LOS_CLKIN="); Serial.print(g_losClkin);
+  Serial.print(" sticky=0x");  Serial.print(g_sticky, HEX);
+  Serial.print(" Rb=");        Serial.print(rbLocked ? "LOCKED" : "UNLOCKED");
+  Serial.print(" CLK4=");      Serial.print(clk4Enabled ? "on" : "off");
+  Serial.print(" i2cErr=");    Serial.println(g_commErrs);
+
+  if (!g_commOk)  Serial.println("  !! I2C read failed (output state held)");
+  if (g_losClkin) Serial.println("  !! no signal on CLKIN");
+  if (g_lolA)     Serial.println("  !! PLLA not locked");
+  if (!rbLocked)  Serial.println("  !! AR-40A unlocked or in holdover");
 }
 
 // -----------------------------------------------------------------------------
@@ -211,20 +316,13 @@ void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
 
-  // I2C0 on the Teensy 3.2 default pins: 18 = SDA, 19 = SCL.
-  // This matches the original firmware, which called Wire.begin() via the
-  // Etherkit library with no pin remapping.
-  //
-  // If the bus is ever moved to the alternate pads (16 = SCL, 17 = SDA),
-  // uncomment the two lines below - they must come before begin(), and only
-  // one pinset can be active since both route the same peripheral.
-  //
-  // Wire.setSCL(16);
-  // Wire.setSDA(17);
+  pinMode(LOCK_BIT_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, LOW);
 
+  // Wire on the Teensy 4.0 default pins: 18 = SDA, 19 = SCL.
   Wire.begin();
   Wire.setClock(400000);
-
   delay(10);
 
   if (!si5351Init()) {
@@ -233,10 +331,46 @@ void setup() {
   }
 
   Serial.println("Si5351C: CLKIN 10 MHz -> PLLA 864 MHz -> CLK4 54 MHz");
-  printStatus();
+  Serial.println("CLK4 gated on LOS_CLKIN / LOL_A. BIT on pin 2 = indication only.");
 }
 
 void loop() {
-  printStatus();
-  delay(2000);
+  readStatus();
+  bool locked = rubidiumLocked();
+
+  if (!g_commOk) {
+    // Bus failure tells us nothing about the reference. Hold the output where
+    // it is and do not touch the run counters.
+  } else if (g_refGood) {
+    badRuns = 0;
+    if (goodRuns < GOOD_READS_TO_ENABLE) goodRuns++;
+    if (goodRuns >= GOOD_READS_TO_ENABLE) setClk4(true);
+  } else {
+    goodRuns = 0;
+    if (badRuns < BAD_READS_TO_DISABLE) badRuns++;
+    if (badRuns >= BAD_READS_TO_DISABLE && DISABLE_ON_LOSS) setClk4(false);
+  }
+
+  // LED: solid when the rubidium is locked and CLK4 is live; slow blink when
+  // the reference is present but the AR-40A has not locked (warm-up or
+  // holdover); off when there is no usable reference at all.
+  if (clk4Enabled && locked) {
+    digitalWrite(STATUS_LED_PIN, HIGH);
+  } else if (clk4Enabled) {
+    digitalWrite(STATUS_LED_PIN, (millis() / 500) & 1);
+  } else {
+    digitalWrite(STATUS_LED_PIN, LOW);
+  }
+
+  // Print on every BIT state change, and otherwise every 8th poll (~2 s).
+  static uint8_t tick = 0;
+  bool stateChanged = firstReport || (locked != lastRbLocked);
+  if (stateChanged || (++tick >= 8)) {
+    report(locked);
+    tick = 0;
+  }
+  lastRbLocked = locked;
+  firstReport  = false;
+
+  delay(POLL_INTERVAL_MS);
 }
