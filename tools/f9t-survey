@@ -119,8 +119,9 @@ cmd_status() {
 
 	[ "${n:-0}" -lt 2 ] && { echo "not enough data yet"; return 0; }
 
-	python3 - "$LOG" <<'PY'
+	python3 - "$LOG" "$elapsed" <<'PY'
 import json, sys, math
+hours_elapsed = float(sys.argv[2])/60.0
 lat=[]; lon=[]; alt=[]; modes={}
 for line in open(sys.argv[1]):
     try: d=json.loads(line)
@@ -154,8 +155,19 @@ if tot:
         print(f"\ndifferential fixes: {dg}/{tot}  ({100*dg/tot:.0f}%)")
     else:
         print("\ncorrections: none, by design (standalone survey, README s10)")
-se = (slat*mlat_m)/math.sqrt(len(lat))
-print(f"standard error of the mean, horizontal: {se:.3f} m  -> {se*3.3:.2f} ns of time bias")
+# The naive standard error assumes independent samples. They are not: the
+# dominant error is multipath, which is tied to satellite geometry and so
+# repeats on a sidereal day. Treating 1 Hz fixes as independent understates the
+# real uncertainty by more than an order of magnitude. Count roughly one
+# independent sample per hour of elapsed time instead.
+sd_h = slat*mlat_m
+naive = sd_h/math.sqrt(len(lat))
+span_h = max(hours_elapsed, 1.0/60)
+neff = max(1.0, span_h)
+honest = max(sd_h/math.sqrt(neff), 0.10)
+print(f"\nscatter (sd, horizontal)      {sd_h:.2f} m")
+print(f"naive standard error         {naive:.3f} m   (optimistic, samples are not independent)")
+print(f"realistic accuracy           {honest:.2f} m  -> {honest*3.3:.1f} ns of time bias")
 PY
 }
 
@@ -165,7 +177,9 @@ cmd_finish() {
 	. "$META"
 
 	local out
-	out=$(python3 - "$LOG" <<'PY'
+	local span_h
+	span_h=$(python3 -c "import sys,datetime;a=datetime.datetime.fromisoformat(sys.argv[1]);print((datetime.datetime.now(a.tzinfo)-a).total_seconds()/3600)" "$started")
+	out=$(python3 - "$LOG" "$span_h" <<'PY'
 import json, sys, math
 lat=[]; lon=[]; alt=[]
 for line in open(sys.argv[1]):
@@ -178,7 +192,11 @@ if len(lat) < 60:
     print("TOOFEW"); raise SystemExit
 mlat=sum(lat)/len(lat); mlon=sum(lon)/len(lon); malt=sum(alt)/len(alt)
 sd=math.sqrt(sum((x-mlat)**2 for x in lat)/len(lat))*111132.0
-se=sd/math.sqrt(len(lat))
+# See the note in status: roughly one independent sample per hour, floored at
+# 10 cm. Writing the naive standard error into FIXED_POS_ACC would tell the
+# receiver the position is an order of magnitude better known than it is.
+span_h = float(sys.argv[2])
+se = max(sd/math.sqrt(max(1.0, span_h)), 0.10)
 # CFG-TMODE LAT/LON are 1e-7 deg with a separate _HP field in 1e-9 deg (-99..99).
 def split(d):
     scaled = round(d*1e9)
@@ -199,7 +217,7 @@ PY
 
 	echo "Survey result from $N fixes:"
 	printf '  lat %s  lon %s  height %s m (HAE)\n' "$MLAT" "$MLON" "$MALT"
-	printf '  standard error %s m  ->  %.2f ns of time bias\n' "$SE" "$(echo "$SE 3.3" | awk '{print $1*$2}')"
+	printf '  realistic accuracy %s m  ->  %s ns of time bias\n' "$SE" "$(echo "$SE 3.3" | awk '{printf "%.1f", $1*$2}')"
 	echo
 	echo "Writing to CFG-TMODE (Flash):"
 	setkey CFG-TMODE-LAT "$LA" 7
