@@ -1,6 +1,6 @@
 # 10 MHz Reference & Timing Rig — Architecture
 
-Status as of 2026-09-09. Written from a rig that was already running; this documents
+Status as of 2026-09-10. Written from a rig that was already running; this documents
 what exists, what is out of spec, and what is still unmeasured.
 
 **Confidence markers used throughout:**
@@ -59,6 +59,8 @@ Explicitly **not** a goal: acting as a Dante or AES67 grandmaster.
                                               │
               Teensy 4.0 ── I2C (18/19) ──────┤
               (BIT lock → pin 2)              │
+              Serial1 (0/1) → CM4             │
+              ttyAMA5, GPIO12/13              │
                                               ▼
                                         CLK4, 8 mA
                                         54 MHz
@@ -72,16 +74,19 @@ Explicitly **not** a goal: acting as a Dante or AES67 grandmaster.
                         │  chrony        │  CM4 IO carrier, L5 out,
                         └────────────────┘  5 V into J20 pin 4 / GND pin 3
                              ▲       ▲
-                     1 PPS ──┘       └── USB (D+/D- on
-                  (PTP hw irq)            breakout header)
-                             │              │
-                        ┌────┴──────────────┴───┐
-                        │  u-blox ZED-F9T       │
-                        │  breakout             │
-                        └───────────────────────┘
+                  1 PPS (TIME2) ─┘       └── UART1, 38400
+                  47 Ω, coax, J2                 ttyAMA0
+                  pin 9 = SYNC_OUT               GPIO14/15
+                             │                      │
+                        ┌────┴──────────────────────┴───┐
+                        │  u-blox ZED-F9T               │
+                        │  breakout                     │
+                        └───────────────────────────────┘
                               │            │ SMA
                           EXTINT           ▼
-                        (from new     GNSS antenna
+                        BNC present,  GNSS antenna
+                        unconnected
+                        (awaits new
                          board) `[plan]`
 ```
 
@@ -296,6 +301,26 @@ phase-noise amplification. 10M is the right input to use.
 | Config | PLLA from CLKIN, 10 MHz × 86.4 = 864 MHz VCO; MS4 ÷16 → 54 MHz on CLK4 | `[built]` |
 | CLK4 drive | 8 mA, 10 Ω series damping resistor | `[built]` |
 | Teensy I2C | default pins 18 (SDA) / 19 (SCL) | `[built]` |
+| Teensy Serial1 | pin 0 = RX1, pin 1 = TX1, 115200 8N1 → CM4 ttyAMA5 | `[built]` |
+
+**Teensy → CM4 status link** `[built]` 2026-09-09. Teensy pin 1 (TX1) → CM4 40-pin
+header pin 33 (GPIO13, RXD5); pin 0 (RX1) ← header pin 32 (GPIO12, TXD5); GND to
+header pin 34. Needs `dtoverlay=uart5`; the port is `/dev/ttyAMA5`. The sketch's
+reports now go to a small `Print` subclass writing to both USB and Serial1, so bench
+debugging is unchanged and the CM4 gets the same text — reference state, PLL lock,
+CLK4 state, AR-40A BIT, and the I2C error count, every ~2 s and on every BIT change.
+Nothing is read from RX1 yet; it is wired for a future command channel.
+
+Measured **0.6 mV** between Teensy ground and CM4 ground after adding this second bond
+between the islands (the first being the 54 MHz coax). `[meas]`
+
+Note both PL011s report `irq = 35` — the F9T's NMEA and the Teensy's status text share
+an interrupt line. Keep the Teensy's message rate low.
+
+Two `.ino` files in one sketch folder are concatenated into a single translation unit
+by the Arduino toolchain, so a stray `si5351c_clkin_54mhz.ino.ino` alongside the real
+one produces a wall of "redefinition of ..." errors starting at the first symbol. The
+primary sketch filename must match the folder name.
 
 **Do not** feed 10 MHz into XA — that input is specified 25–27 MHz only.
 
@@ -327,15 +352,108 @@ moving that reference relative to the incoming coax shield.
 - Note the 40-pin header's 5 V pins are the same net as J20's — feeding either
   backfeeds the onboard supply identically. The header is not a way around L5.
 
+**J2 is the 14-pin configuration header, not the 40-pin GPIO header.** Jumper across
+pins 1–2 is `nRPI_BOOT`, 3–4 is `EEPROM_nWP`. Reference layout: 1 GND, 2 nRPIBOOT,
+3 GND, 4 EEPROM_nWP, 5 AIP0, 6 AIP1, 7 GND, 8 SYNC_IN, 9 SYNC_OUT, 10 GND, 11 TVDAC,
+12 GND, 13 RUN_PG, 14 GLOBAL_EN.
+
+**The PPS goes to pin 9, the one labelled SYNC_OUT.** `[meas]` The label describes the
+PHY's role in a 1588 network, not the direction of your wire. The driver exposes
+exactly one PTP pin, names it `SYNC_OUT`, and `/sys/class/ptp/ptp0/pins/SYNC_OUT`
+reads `1 0` — function 1 = `PTP_PF_EXTTS`, channel 0. Pin 8, labelled SYNC_IN, is
+reported by others to be not correctly wired on the CM4IO. A jumper was already
+sitting on pin 9 from the earlier build; that was the answer all along.
+
+**PHY hardware timestamping works on this install.** `[meas]` `ethtool -T eth0`
+reports hardware-transmit, hardware-receive and PTP Hardware Clock 0. This is not
+standard — the BCM54210PE driver came from Timebeat on Raspberry Pi's behalf and
+needs an out-of-tree kernel build. **That makes this rootfs hard to reproduce**, which
+is the whole argument for the image below and against a rolling distro.
+
+**Timing software chain, as configured** `[built]`: chrony reads the extts events
+itself via `refclock PHC /dev/ptp0:extpps` — no `ts2phc` involved, and no unit for it
+exists. `phc2sys -s CLOCK_REALTIME -c eth0` pushes the disciplined system clock *out*
+to the PHC for the PTP server side. `refclock SHM 0` takes NMEA from gpsd, `noselect`.
+`hwtimestamp eth0`. Upstream NTP is mikes.fi.
+
+**Deliberate tuning in config.txt worth carrying forward:** `force_turbo=1` pins the
+core clock (the mini-UART's baud derives from it), and `dtparam=eee=off` plus
+`genet.eee=N` on the kernel command line both disable Energy Efficient Ethernet, which
+otherwise wrecks PTP latency. `dtoverlay=miniuart-bt` and `dtoverlay=disable-bt` were
+both present and contradictory; **`miniuart-bt` removed 2026-09-10**, `disable-bt`
+kept. `dtoverlay=uart5` added 2026-09-09 for the Teensy link.
+
+**eMMC imaged 2026-09-09** `[built]` via `rpiboot -d mass-storage-gadget64` from the
+Arch laptop, jumper on J2 1–2, micro-USB to J11, ~40 MB/s. Two obstacles worth
+remembering: **usbguard** blocks the device when it re-enumerates after the first boot
+stage, which shows up as "Device located successfully" followed by
+`op_get_active_config_descriptor: device unconfigured` and a segfault — stopping the
+daemon does not undo an existing block, the device has to be allowed or the policy set
+permissive. And the `mass-storage-gadget64` files live in the usbboot repo, so build
+from source rather than relying on a packaged `rpiboot`.
+
+**No-boot diagnostics, learned 2026-09-10 the long way.** A whole session went into a
+CM4 that would not boot; it turned out to be the Ethernet cable. The clock, both
+firmware versions, the filesystems and the F9T-on-the-console theory were all
+suspected and all innocent. Worth keeping the shortcuts that would have found it in
+minutes:
+
+- **If `rpiboot` enumerates the eMMC, XIN is good.** The BCM2711 boot ROM runs off
+  XIN, so a device appearing on the laptop proves the whole clock chain — AR-40A,
+  pad, DA, Si5351, CLK4 — in one step, without a scope. First thing to try, not last.
+- **A genet or PHY error means it booted.** "eth0 failed to connect PHY" comes from
+  the kernel, so ROM, bootloader, kernel and userspace all ran. Any kernel message
+  at all is proof of boot.
+- **J2 1–2 (`nRPI_BOOT`) must come off after imaging.** Left on, the CM4 goes to USB
+  boot mode every time and looks identical to a dead board.
+- **A FAT dirty bit after an imaging session is a souvenir, not damage.** `fsck.fat`
+  reporting a boot-sector difference at offset 65 *is* the dirty flag — one finding,
+  not two. Disable desktop automount before attaching the gadget: automounting ext4
+  replays the journal, which is a write, and that is the plausible route by which a
+  read-only imaging session ends up dirtying anything.
+- **Incoming UART traffic cannot hang a Pi boot.** No boot stage reads the console.
+  A baud mismatch makes a healthy boot *look* dead on a terminal, which is a
+  different problem — see the boot-console item in §7.
+
 ### u-blox ZED-F9T on breakout
-- I/O 3.3 V at the module. Whether *this breakout* level-shifts to 5 V is
-  unconfirmed. `[?]`
-- Header: +5V, GND, RX(2)/TX(2), TIME(1)/TIME(2), EXTINT, READY, SCL/SPI_CLK,
+
+- I/O is 3.3 V. Confirmed indirectly 2026-09-09: the breakout's TX drives GPIO15
+  cleanly and the CM4 decodes it, which a 5 V-shifted output would not do without
+  conducting through the input's protection diode. `[meas]`
+- Header: +5V, GND, RX(2)/TX(2), TIME(2)/TIME(1), EXTINT, READY, SCL/SPI_CLK,
   SDA/SPI_CS, USB D−/D+, RX/SPI_MOSI, TX/SPI_MISO. SEL pad selects UART+I²C vs SPI.
-- TIME(1) = TIMEPULSE1 = 1 PPS default → CM4 PTP hardware interrupt. `[built]`
-- Data to CM4 over USB, ordinary USB cable on the D+/D− header pins. Worked, but
-  grounding was sketchy in several places. `[built]`
-- EXTINT unused. Available for UBX-TIM-TM2 time-marking. `[plan]`
+- **Data link: UART1, not USB.** `[built]` 2026-09-09. F9T TX/SPI_MISO → CM4 GPIO15
+  (header pin 10, red), CM4 GPIO14 (header pin 8, white) → F9T RX/SPI_MOSI. 38400 8N1
+  on **/dev/ttyAMA0** — the PL011, reached via `dtoverlay=disable-bt`. NMEA confirmed
+  flowing. USB was dropped deliberately: the breakout ties header +5V and USB VBUS,
+  so a cable from the CM4 would have paralleled the RS-15-5, and USB on a CM4 sits
+  behind the VL805 over PCIe. u-center remains available over ser2net if wanted.
+- **1 PPS: TIME2 → CM4 J2 pin 9.** `[built]` 2026-09-09. Miniature coax, 47 Ω series
+  at the F9T end, **shield grounded at the CM4 end only** (see below). chrony sees
+  the pulses.
+- **TIME1 free**, deliberately: if UBX-TIM-TP reports quantisation error for TP1
+  only on this firmware, TP1 is wanted for that. Also the scope reference when the
+  ÷10⁷ output arrives.
+- **EXTINT is already brought out to a BNC** near the F9T `[built]`, currently
+  unconnected and **not galvanically isolated**. Awaits the ÷10⁷ output from the
+  planned board for UBX-TIM-TM2 time-marking. `[plan]` Isolate that path later only
+  if a ground problem actually appears on it — no panel work is needed to use it.
+
+**Grounding the PPS shield at both ends killed the F9T.** `[meas]` 2026-09-09. With
+the shield bonded at the F9T end as well as at J2, the module stopped responding on
+the UART entirely; lifting it at the F9T end restored everything immediately. First
+read was pin contention against a PHY output — wrong. Measured afterwards: **<10 mV**
+between F9T ground and CM4 ground with the single bond, so the steady-state potential
+was never the problem, and the mechanism remains unexplained. Recorded rather than
+solved; do not reintroduce the second bond casually.
+
+**TIME2 pulse measured at the CM4 end** `[meas]` 2026-09-09: 3.32 Vpp, 18 ns rise.
+This settles a documentation conflict: the pad is 3.3 V. The CM4 datasheet says 3.3 V
+in §2.2 and its pin list, but an older revision and the CM4IO schematic net labels
+both say 1.8 V. No level translation needed.
+
+The RMS figure from the same session (2.18 V, implying ~43% duty) was a scope
+measurement-window artefact, not the module's config. Disregard it.
 
 ---
 
@@ -498,6 +616,14 @@ PPS timestamping is referenced to. This doesn't break anything; it biases and sl
 modulates the threshold crossing, which looks like a small wandering offset rather
 than a fault.
 
+**Measured 2026-09-09** `[meas]`: F9T ground to CM4 ground <10 mV; Teensy ground to
+CM4 ground 0.6 mV. Both bonds are therefore benign in steady state. The one reading
+still missing is CM4 to Extron chassis, which is where mains earth would show up.
+
+Note also that grounding the PPS coax shield at *both* ends stopped the F9T dead
+(§3) — a fault the millivolt readings do not explain, and a reason to treat added
+bonds between islands as changes worth testing rather than tidying.
+
 **Measurements to settle it:** DMM on AC volts between (a) F9T ground and CM4 ground,
 (b) CM4 ground and Extron chassis. More than a few mV means loop current worth
 chasing. `[?]`
@@ -553,34 +679,72 @@ from a DA output. Gains 2.22 Vpp (~1.7× better slew, proportionally less
 threshold-noise jitter) and removes the board's ground from the Extron's mains earth.
 Costs a second output or splitter at the rubidium.
 
+**Scope question — settle before layout.** Three apparently separate choices are one
+decision:
+
+1. Whether the squarer, Si5351 and Teensy share one enclosure (§6b consolidation).
+2. Whether the board is fed from a DA output or straight from the rubidium (above).
+3. Whether the CM4's XIN gets a proper receiver circuit at its end instead of a bare
+   10 Ω into a clamping input (§8).
+
+(3) is **deferred until a second identical CM4 module is available** to experiment on
+— the running rig is not the place to characterise that input, and the answer is a
+circuit at the far end, not a probe reading. It therefore won't be resolved on this
+board's schedule. But the board should be laid out knowing it is coming: treat the
+54 MHz path as a driver into a defined load rather than as a wire, and leave the
+series-element footprint able to take something other than a single 10 Ω.
+
+Item 8 in §7 no longer blocks ordering: the DA's behaviour into 75 Ω gets measured at
+the rack move, and the jumper-selectable 75/50 Ω input termination covers either
+outcome.
+
 ---
 
-## 6b. ZED-F9T wiring — decided and outstanding
+## 6b. ZED-F9T wiring — built 2026-09-09
 
-Consolidated here because this is the next work item.
+Full detail in §3. Summary of what was decided and what it cost:
 
-**Decided:**
+**Built:**
 
-- **TIME1 → CM4 stays internal and direct.** Both boards are in the same enclosure;
-  routing a PPS edge out to a bulkhead and back in adds connectors and shield
-  decisions to a path that wants to be short. Miniature coax (RG-178 or 1.13 mm),
-  centre to TIME1, shield to a GND pin on the F9T header and to CM4 ground at the far
-  end, **33–47 Ω series at the F9T end**, receiver high-Z. Do not shunt-terminate —
-  the ZED's CMOS output cannot drive 50 Ω properly. `[plan]`
-- **EXTINT gets a bulkhead connector.** Its source is the planned squarer/divider
-  board (§6), which may live outside this enclosure. Isolated from the chassis,
-  shield to board ground. `[plan]`
-- **Don't hand-wire the USB D+/D− header pins.** A cut USB cable is a real 90 Ω pair
-  with a drain and is acceptable; flying leads are not. `[built]` — the existing link
-  used a normal USB cable, which worked, but grounding was sketchy in several places.
+- **UART1 → CM4 ttyAMA0**, 38400, GPIO14/15. USB rejected on VBUS-parallelling and
+  VL805 latency grounds.
+- **TIME2 → CM4 J2 pin 9 (SYNC_OUT)**, 47 Ω series at the F9T end, coax, shield
+  bonded at the CM4 end only. chrony sees pulses. The header label is misleading;
+  the driver's pin name is the one that matters.
+- **Don't hand-wire the USB D+/D− header pins.** Moot now that the link is UART, but
+  kept: a cut USB cable is a real 90 Ω pair with a drain and is acceptable; flying
+  leads are not.
 
-**Outstanding:**
+**Still outstanding:**
 
-- I/O level: 3.3 V at the module, but whether *this breakout* level-shifts to 5 V is
-  unconfirmed. Check before anything touches CM4 GPIO. `[?]`
-- Data link: fix the USB grounding (cable GND to a header GND pin, short; shield
-  terminated at the CM4 end only) or move to UART. `[?]`
-- Antenna shield bonding point, and surge protection if roof-mounted. `[?]`
+**Guiding decision: keep the existing configuration.** The F9T already carries a
+site-surveyed fixed position. That is the good configuration and it stays. The goal
+is to *read it back and understand it*, so it can be worked with when needed —
+**not** to re-run survey-in, which would throw away a settled position in exchange
+for a worse one. Everything below is a read unless it says otherwise.
+
+- **Get a current `ubxtool`.** The packaged one predates CFG-VALGET and `-g` returns
+  nothing, which is the single thing blocking every read below. Single Python file
+  into `/usr/local/bin`, or read from another machine over USB. `[?]`
+- **Read back TMODE** and confirm the fixed position is still set and has not
+  reverted to survey-in or to continuous solving. `[?]`
+- **Read back TP2** and confirm **both** the locked and unlocked cases are stored —
+  `CFG-TP-TP2_ENA`, `PULSE_DEF`, `FREQ_TP2`, `FREQ_LOCK_TP2`, `LEN_TP2`,
+  `LEN_LOCK_TP2`, `USE_LOCKED_TP2`. Only the unlocked pair being configured is the
+  classic cause of a pulse that stops at first fix. Write only if something is
+  genuinely missing. `[?]`
+- **Read back the antenna cable delay already in CFG-TP5.** It was presumably set
+  when the site was surveyed; know the number before touching it. `[?]`
+- **Does the antenna run change at the rack move?** If the antenna and its coax stay
+  put and only the box moves, the stored delay remains valid and CFG-TP5 needs
+  nothing. If the run is re-made, re-measure and re-enter (≈5 ns/m for RG-58 at
+  0.66 VF). `[?]`
+- **gpsd is pointed at the wrong device.** chrony's NMEA refclock reads reach 0.
+  `/etc/default/gpsd` most likely still names the USB device from before. Fix even
+  though it is `noselect` — the seconds label disambiguates which second a PPS edge
+  belongs to. `[?]`
+- Antenna shield bonding point, and surge protection if roof-mounted. A DC-*passing*
+  arrestor — a plain DC block kills the active antenna's bias. `[?]`
 
 **Header pinout** (from the breakout drawing): +5V, GND, RX(2)/TX(2), TIME(2)/TIME(1),
 EXTINT, READY, SCL/SPI_CLK, SDA/SPI_CS, USB D−/D+, RX/SPI_MOSI, TX/SPI_MISO. A SEL pad
@@ -597,7 +761,9 @@ Every fast edge stays on one ground plane, which makes most of §5 stop matterin
 
 ## 7. Open items
 
-Ordered by what blocks what.
+Grouped by what access each one needs — software, a DMM, the soldering iron, or the
+rack with the Orion attached. See the sequencing note below for why that ordering
+changed.
 
 ### Closed
 
@@ -630,63 +796,158 @@ Ordered by what blocks what.
   a second at a time — now a third state that holds the output; and a single-poll
   blip could disable, now debounced at two consecutive bad reads.
 
-### Open — digital side, doable on the bench
+- ~~**Confirm the F9T breakout's I/O level.**~~ 2026-09-09: 3.3 V, confirmed by the
+  UART decoding cleanly on GPIO15 (§3).
+- ~~**Decide the F9T data link.**~~ 2026-09-09: UART1 on ttyAMA0 at 38400. USB
+  rejected — the breakout ties header +5V to USB VBUS, and CM4 USB sits behind the
+  VL805 over PCIe.
+- ~~**Wire the F9T PPS.**~~ 2026-09-09: TIME2 → J2 pin 9 (SYNC_OUT), 47 Ω, shield at
+  the CM4 end only. chrony sees pulses. Settled the pin-8-vs-9 question and the
+  1.8 V-vs-3.3 V documentation conflict at the same time (§3).
+- ~~**Cut the Teensy's VUSB pad.**~~ 2026-09-09. USB and the external 5 V can now
+  coexist.
+- ~~**Teensy → CM4 status link.**~~ 2026-09-09: Serial1 → ttyAMA5 on GPIO12/13,
+  115200. Firmware reports to USB and Serial1 together (§3).
+- ~~**Image the eMMC.**~~ 2026-09-09, via rpiboot mass-storage-gadget64. Motivated by
+  discovering the kernel carries a non-standard BCM54210PE timestamping driver (§3).
+  **Image verified readable 2026-09-10.** An unopened image is a hypothesis, not a
+  backup; this one is now actually a backup of the irreproducible kernel.
+- ~~**Drop `dtoverlay=miniuart-bt`.**~~ 2026-09-10. `disable-bt` kept (§3).
+- ~~**I2C data integrity — fix flashed and its premise verified.**~~ 2026-09-10.
+  Bus to 100 kHz; reg 20 read back at init and **verified 0x4F**, closing the CLK4
+  drive-strength question for good; a fourth gating state for readings rejected by
+  the reg0/reg1 sticky cross-check, counted as `dataErr` because `i2cErr` only
+  counts failed transactions and was under-reporting.
 
-1. **I2C bus integrity.** A single poll returned reg0=0xC1 with SYS_INIT apparently
-   set while every other flag and the sticky byte were unchanged — a bit error in
-   transit, not a real event. It did not trip the output only because of the
-   two-read debounce. Note `i2cErr` stays at 0 for these, since the transaction
-   succeeded and only the data was wrong, so the true error rate is higher than the
-   counter shows. Check whether the breakout fits I2C pull-ups; the Teensy 4.0's
-   internal ones are weak and 400 kHz over wire with only those is marginal. Try
-   `Wire.setClock(100000)` — polling is 4 Hz, the rate is irrelevant. A software
-   cross-check is also available: a fault flag set while its sticky counterpart
-   reads clear is self-contradictory and can be rejected. `[?]`
-2. **Cut the Teensy's VUSB pad.** It currently runs from USB alone with the PSUs
-   off, so the pad is intact — connecting USB with the 5 V PSU on would tie the
-   laptop's rail to the whole digital island. Until then, one supply at a time.
-3. **Read back register 20** and confirm it contains 0x4F, to take the firmware out
-   of any future argument about CLK4 drive strength. `[?]`
-4. **Confirm the F9T breakout's I/O level** is 3.3 V and not shifted to 5 V, before
-   anything touches CM4 GPIO.
-5. **Decide the F9T data link:** fix USB grounding (cable GND to a header GND pin,
-   short; shield terminated at the CM4 end only) or move to UART.
-6. **Bring EXTINT to a bulkhead connector** while the back panel is open; TIME1 to
-   the CM4 stays internal, direct, on miniature coax with 33–47 Ω series at the F9T
-   end.
+  **`FAULT_MASK` is 0x30 — LOL_A and LOS_CLKIN only.** Measured: sticky reads 0xC0
+  on every steady-state poll, i.e. SYS_INIT_STKY and LOL_B_STKY both re-latch
+  immediately after each clear, so neither can ever contradict a live bit. A
+  glitched reg0=0xC1 was observed sailing through the earlier 0xB0 mask with
+  `dataErr=0` for exactly this reason. `[meas]`
 
-### Open — needs the rack move, or the AR-40A powered down
+  **The premise is confirmed, not assumed:** the first poll after init read
+  `sticky=0xE0` — LOL_A_STKY latched while PLLA was acquiring — and every poll
+  since reads 0xC0. So LOL_A_STKY latches on the event and stays clear once the
+  condition is gone, which is what makes the cross-check meaningful rather than
+  vacuous. `[meas]`
 
-7. **Verify a DA output is a clean sine into a real 75 Ω load.** Measured clean
-   unloaded (§3), which rules out voltage clipping and slew limiting. What is still
-   untested is current drive into 75 Ω. *This gates the board design* — if the DA
-   sags, the board's input level changes and the Extron's role has to be
-   reconsidered. Mitigate by laying out footprints for either 75 Ω or 50 Ω
-   termination, jumper-selected, so the board can be ordered without waiting.
-8. **Confirm the Orion's actual AC termination.** Same measurement as item 7: T at
-   the Orion's input, read Vpp with the Orion connected vs disconnected.
-   ~1.26 / ~2.5 Vpp means it terminates at 75 Ω.
-9. **AC volts between grounds** — F9T↔CM4, CM4↔Extron chassis. Take the F9T↔CM4
-   reading with the 10 MHz coax disconnected as well as connected; the difference is
-   the actual size of the earth-path effect. Take these with the laptop on battery
-   or unplugged — a mains-connected laptop adds its own earth path through USB.
-10. **Is the AR-40A chassis at mains PE?** Unplugged continuity check, enclosure to
-    inlet earth pin. Determines whether the 10 MHz chain has one earth injection or
-    two (§5).
-11. **Resolve the CLK4 amplitude discrepancy** (§8): 1.22 Vpp and 3.4 Vpp measured
-    at 54 MHz with the CM4 attached both times. Most likely the scope's 20 MHz
-    bandwidth limit was enabled for the earlier reading. Worth settling, since it
-    determines what the CM4's XIN is actually being fed. `[?]`
-12. **Antenna:** confirm where the coax shield is bonded; if roof-mounted, a
+  Consequently **SYS_INIT is reported but no longer gated on**: its sticky cannot
+  police it, so a single flipped bit 7 would otherwise be two polls from cutting the
+  CM4's clock. Startup is still covered by the SYS_INIT wait in `si5351Init()`, and
+  a genuine device reset shows on LOL_A too.
+
+  Gating sequence confirmed on this build: `CLK4=off` on the first report, enabled
+  on the fourth clean poll, steady thereafter.
+
+### Sequencing — what the constraint actually is
+
+The rack move is the last moment the box and the scope are on the same table, and
+after it the Orion is available as a load. That used to imply a large "do it before
+the move" batch. It no longer does:
+
+- The CLK4/XIN amplitude question is deferred until a second CM4 exists (§8), so it
+  is not a bench item at all.
+- EXTINT is already on a BNC (§3), so no panel work is outstanding.
+- The Teensy's USB is reachable from the rack, and its status text also reaches the
+  CM4 on ttyAMA5, so **firmware iteration does not require pulling the box.**
+- The AR-40A chassis-to-earth check is a property of the unit, not of the bench.
+
+What is left before the move is therefore software, plus building two connectors.
+
+### Open — today, software only
+
+1. **Soak `dataErr`.** The firmware is flashed and working, but a handful of clean
+   polls proves nothing — the 0xC1 event was roughly one in several hundred at
+   400 kHz. Leave it running an hour or two and read the counter. Zero means the bus
+   speed was the whole story and the pull-up question closes; anything above zero is
+   the previously-invisible error rate finally being counted, and the answer is
+   external 2.2k–4.7k to 3V3 on SDA/SCL. `[?]`
+2. **`setClk4()` asserts rather than verifies.** It writes reg 3 and discards
+   `siWrite()`'s return, so the log prints "CLK4: ENABLED" whether or not the write
+   landed — the status line reports intent, not state. Read reg 3 back and report
+   the actual OE register. Cost nothing today only because the clock turned out to
+   be fine. `[plan]`
+3. **Get a current `ubxtool`** onto the CM4 (single Python file into
+   `/usr/local/bin`); the packaged one predates CFG-VALGET and returns nothing.
+   Then do the read-backs in §6b — TMODE, TP2 both cases, existing CFG-TP5 cable
+   delay. **Reads, not writes**: the surveyed position stays.
+4. **Point gpsd at /dev/ttyAMA0.** chrony's NMEA refclock shows reach 0;
+   `/etc/default/gpsd` most likely still names the old USB device. `[?]`
+5. **No boot console.** The 2026-09-10 session was spent blind because GPIO14/15 is
+   correctly occupied by the F9T, so there is nowhere to watch a boot. Everything
+   diagnosed that day was diagnosed by inference. The Teensy has spare UARTs and a
+   USB path to the bench, and is a candidate host for a console bridge — this
+   overlaps the §6b consolidation question. `[plan]`
+
+### Open — five minutes with a DMM, whenever the box is reachable
+
+6. **Is the AR-40A chassis at mains PE?** Unplugged continuity, enclosure to inlet
+   earth pin. Determines whether the 10 MHz chain has one earth injection or two
+   (§5). This is a property of the unit — bench or rack makes no difference. `[?]`
+
+### Open — build the connectors before the move
+
+7. **DIY a 75 Ω terminator, a 50 Ω terminator and a BNC tee** from the chassis
+   connectors already on hand. See the construction note below. Without a known-value
+   terminator of his own, item 8's result is ambiguous between "the DA sags into a
+   real load" and "the Orion doesn't terminate at 75 Ω" — the terminator is what
+   makes that measurement mean anything, so this is not a stopgap for a bought part.
+
+### Open — the rack move, one measurement session with the scope carried over
+
+8. **DA output into a real 75 Ω load, and the Orion's actual termination — one
+   procedure, three readings** at the Orion's input, same setup, same probe:
+   1. Cable open → **V_open**, the DA's unloaded output.
+   2. Known 75 Ω terminator on the free leg of the tee → if this reads ≈ V_open/2,
+      the DA's build-out really is 75 Ω *and* it drives a real load without sagging.
+      That closes the item-8 question on its own.
+   3. Orion connected → with the source impedance now confirmed, the Orion's input
+      resistance is 75 × V_orion / (V_open − V_orion). ~1.26 V against ~2.5 V open
+      means it terminates at 75 Ω.
+
+   Measured clean unloaded already (§3), which rules out voltage clipping and slew
+   limiting; what is untested is current drive. **No longer gates the board** — the
+   jumper-selectable 75/50 Ω input termination covers either outcome (§6).
+9. **AC volts between grounds** — CM4↔Extron chassis is the one still unmeasured.
+   F9T↔CM4 read <10 mV and Teensy↔CM4 0.6 mV on 2026-09-09 (§3). Take the readings
+   with the 10 MHz coax disconnected as well as connected; the difference is the
+   actual size of the earth-path effect. Laptop on battery or unplugged — a
+   mains-connected laptop adds its own earth path through USB. Belongs here rather
+   than at the bench: the earth topology that matters is the rack's.
+10. **Antenna:** confirm where the coax shield is bonded; if roof-mounted, a
     gas-discharge arrestor at the entry point. A GNSS DC block / galvanic isolator
     removes a whole class of ground problem, provided it passes the active antenna's
-    bias.
+    bias. Also settles whether the antenna run — and therefore the stored CFG-TP5
+    delay — changes at the move (§6b).
 
-### Shopping list
+### Deferred — waiting on hardware that isn't here
 
-- BNC tees — none on the bench.
-- 75 Ω BNC feedthrough terminator — the SDS1104X-E is 1 MΩ fixed, no switchable 50 Ω.
-- SMA attenuator kit (1/2/3/6/10 dB), optional but useful for bench work.
+11. **CLK4 amplitude / CM4 XIN receiver** (§8). Needs a second identical CM4 module
+    to experiment on, and the real output is a proper circuit at the CM4 end rather
+    than a resolved probe reading. Not chased on the running rig. Feeds the §6 scope
+    question.
+12. **The squarer/divider board itself.** Blocked only on the §6 scope question
+    (enclosure consolidation, feed point, 54 MHz drive), not on any measurement.
+
+### Connector construction note
+
+At 10 MHz the wavelength in coax is ~20 m, so a few centimetres of unmatched junction
+is electrically invisible and home-made parts are not a compromise. A small axial
+metal-film resistor carries a few nH of parasitic inductance — j0.3 Ω against 75 Ω at
+10 MHz. An 0805 soldered straight across a BNC is better still.
+
+What matters is the **value, not the RF construction**: measure the resistor on the
+DMM and use the measured figure in the arithmetic. 75.0 Ω exists in E96, but a
+measured 74.3 Ω used knowingly beats a nominal 75 Ω used blindly.
+
+Build the terminators as **male plugs** rather than feedthrough barrels where there is
+a choice — a plug goes on the free leg of the tee, which is where it is wanted, and
+doubles as a load elsewhere. Make the 50 Ω one at the same time for the
+bench-instrument leg. Keep the leads short and the resistor body inside the shell.
+
+Still worth buying eventually, but no longer blocking anything: a proper 75 Ω
+feedthrough (the SDS1104X-E is 1 MΩ fixed, no switchable 50 Ω) and an SMA attenuator
+kit (1/2/3/6/10 dB) for general bench work.
 
 ---
 
@@ -707,11 +968,20 @@ Kept here so they aren't "fixed" without thought.
   than a crystal input nominally does — likely the internal Pierce amplifier
   running. `[?]`
 
+  **Deferred, deliberately.** Not being chased on this rig. Characterising XIN
+  properly means loading and probing an input that the whole system depends on, and
+  the useful output is a designed receiver circuit at the CM4 end rather than a
+  settled scope reading. Both want a **second identical CM4 module** to experiment
+  on. Until one turns up this stays as it is — it has worked for years — and the
+  board is laid out to anticipate it (§6).
+
   For PPS timestamping accuracy this path is close to irrelevant anyway — a few ps
   of jitter on the CPU clock disappears under interrupt latency. It matters for boot
   stability and for system clock frequency accuracy at long tau, not for edge
   capture.
-- **AR-40A into the Extron at 3.02 Vpp** vs 1.5 Vpp max. Being fixed by the pad.
+- ~~**AR-40A into the Extron at 2.75 Vpp** vs 1.5 Vpp max.~~ **Resolved 2026-09-07**
+  by the 7.01 dB pad; the DA now sees 1.245 Vpp. Kept as history — the years spent
+  overdriven are the reason item 8 in §7 is still worth measuring.
 - **Zero-centred sine into Si5351 CLKIN — CONFIRMED BY MEASUREMENT 2026-09-09.**
   `[meas]` Fed 2.49 Vpp unterminated from a DA output, CLKIN measures **2.1 Vpp /
   776 mV rms, visibly asymmetric**. That is the predicted clamping: the positive peak
