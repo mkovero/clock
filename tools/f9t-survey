@@ -143,9 +143,17 @@ mlon_m = 111320.0*math.cos(math.radians(mlat))
 print(f"\nmean lat  {mlat:.9f}  sd {slat*mlat_m:6.2f} m")
 print(f"mean lon  {mlon:.9f}  sd {slon*mlon_m:6.2f} m")
 print(f"mean hae  {malt:.3f} m      sd {salt:6.2f} m")
-# gpsd status: 2 = DGPS corrections applied
+# gpsd status 2 = DGPS corrections applied. Expected to be zero here: this rig
+# surveys standalone on purpose. Differential corrections carry the reference
+# station's own receiver clock offset, which is a harmless nuisance parameter
+# when solving for position but would be imported straight into the answer when
+# solving for time. See README section 10.
 dg=modes.get(2,0); tot=sum(modes.values())
-print(f"\ndifferential fixes: {dg}/{tot}  ({100*dg/tot:.0f}%)" if tot else "")
+if tot:
+    if dg:
+        print(f"\ndifferential fixes: {dg}/{tot}  ({100*dg/tot:.0f}%)")
+    else:
+        print("\ncorrections: none, by design (standalone survey, README s10)")
 se = (slat*mlat_m)/math.sqrt(len(lat))
 print(f"standard error of the mean, horizontal: {se:.3f} m  -> {se*3.3:.2f} ns of time bias")
 PY

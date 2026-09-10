@@ -1,6 +1,6 @@
 # 10 MHz Reference & Timing Rig — Architecture
 
-Status 2026-09-10. Written from rig already running. Doc say what exist, what out of
+Status 2026-09-11. Written from rig already running. Doc say what exist, what out of
 spec, what still unmeasured.
 
 **Confidence marks:**
@@ -712,11 +712,23 @@ says otherwise.
   locked frequency fields are 1 Hz, but `USE_LOCKED_TP2=0`, so the unlocked waveform is
   deliberately used in both states; the zero locked-length/duty fields cannot stop the
   pulse after fix. RAM and flash agree. No write made.
-- **Antenna cable delay read back 2026-09-10:** `CFG-TP-ANT_CABLEDELAY=5` ns in RAM and
-  flash. `[meas]`
-- **Does antenna run change at rack move?** If antenna and coax stay put and only box
-  moves, stored delay remains valid and CFG-TP5 needs nothing. If run is re-made,
-  re-measure and re-enter (≈5 ns/m for RG-58 at 0.66 VF). `[?]`
+- ~~**Antenna cable delay read back 2026-09-10:** `CFG-TP-ANT_CABLEDELAY=5` ns.~~
+  **Corrected to 40 ns, 2026-09-11.** `[meas]` The run is 8 m (5 m + 3 m, RG-174/RG-58
+  class, solid PE, VF 0.66):
+
+      8.0 m / (0.660 × 299792458 m/s) = 40.4 ns
+
+  So the stored 5 ns under-compensated by **35 ns**, and the time pulse was that much
+  late against UTC. This was the largest single error in the whole chain — larger than
+  chrony's PPS standard deviation, and more than ten times the receiver's own reported
+  `tAcc`. Being systematic rather than random, no amount of averaging touched it.
+
+  Refinable by a couple of ns if the cable turns out to be PTFE (VF 0.695 → 38 ns) or
+  foam PE (VF 0.83 → 32 ns). Does not include antenna LNA group delay, unspecified here
+  and typically 10–30 ns; fold that in if it is ever measured. `[?]`
+- **Antenna run changes invalidate this.** Re-measure and re-enter if the run is re-made
+  (≈5 ns/m for RG-58 at 0.66 VF). The antenna was moved on 2026-09-11 but the cable was
+  not re-made.
 - **gpsd device corrected.** `[built]` 2026-09-10: `/etc/default/gpsd` names
   `/dev/ttyAMA0`; gpsd is active and identifies the ZED-F9T at 38400. Antenna is detached
   until the rack move, so no valid fix or UTC is expected now. chrony's NMEA/SHM source
@@ -934,7 +946,21 @@ the rack move.
 
 ### Open — receiver configuration, once the antenna is finally sited
 
-14. **Only GPS and Galileo E1 are actually live.** `[meas]` The per-constellation master
+14. ~~**Only GPS and Galileo E1 are actually live.**~~ **Done 2026-09-11.** `[meas]`
+    `GAL_E5B`, `BDS_B1` and `BDS_B2` enabled, making Galileo dual-frequency to match GPS
+    and adding BeiDou as a third system. The seven RTCM3 base-station message types were
+    switched off on UART1 at the same time — nothing consumed them and they were a large
+    part of the ~250 ms serial cycle latency.
+
+    Measured before → after: satellites used **11 → 23**, PDOP **3.74 → 1.65**, TDOP
+    **3.02 → 1.05**, receiver `tAcc` **3 ns → 1 ns**. The antenna was repositioned in the
+    same window, so the C/N₀ improvement (43 → 48 dB-Hz peak) cannot be attributed to the
+    constellation change alone.
+
+    GLONASS, QZSS and SBAS remain deliberately off; reasoning is recorded in
+    `config/f9t-timing-changes.txt` so it does not get "fixed" by accident.
+
+    Original finding, kept because the trap is worth remembering: the per-constellation master
     switches are misleading: `CFG-SIGNAL-{SBAS,BDS,QZSS,GLO}_ENA` all read 1, but every
     signal underneath them reads 0, so they contribute nothing. What is genuinely
     enabled is `GPS_L1CA`, `GPS_L2C`, `GAL_E1` — confirmed both from config and from the
@@ -945,10 +971,27 @@ the rack move.
     the dominant residual error at this level. **Enabling `GAL_E5B` is the single
     highest-value change** — it buys Galileo the same treatment. Adding GLONASS or BeiDou
     afterwards helps DOP but not accuracy, and costs UART bandwidth (§9): `UBX-NAV-SAT`
-    grows with satellite count, and the serial cycle is already landing ~250 ms late at
-    38400. Raise the baud first if constellations are added. `[plan]`
+    grows with satellite count. Raising UART1 to 115200 remains open and is the next
+    bandwidth step if more signals are ever added. `[plan]`
 
-15. **Survey the antenna position properly with RTK, then freeze it.** `[plan]` In TMODE
+15. **Survey the antenna position — running since 2026-09-11.** `[built]` See §10 for
+    the DGNSS attempt and why the survey is running standalone. Started with
+    `f9t-survey start 10`; `f9t-survey status` reports progress, `f9t-survey finish`
+    writes the mean to Flash, sets `FIXED_POS_ACC` to the achieved standard error, clears
+    the stale ECEF fields and restores fixed mode.
+
+    **The antenna was moved on 2026-09-11**, so the stored position is not merely
+    imprecise, it is stale. Early rover fixes put the antenna several metres from the
+    stored coordinates, i.e. of order 19 ns of bias.
+
+    TMODE is dropped in the RAM layer only for the duration, so a power cut during the
+    survey restores fixed mode rather than leaving the rig a rover. Timing runs degraded
+    while it is in progress: the receiver is a rover and the PPS carries position-solution
+    noise.
+
+    Original reasoning:
+
+    In TMODE
     fixed the receiver treats the configured position as truth, so error in that position
     maps almost directly into a *constant time bias* — roughly **3.3 ns per metre**.
 
@@ -1188,3 +1231,108 @@ for things that are actually news.
 - An `ntpsec` leftover still runs an `ntploggps` cron entry. It is guarded by
   `[ ! -d /run/systemd/system ]` so it never fires on this systemd host, but it is dead
   weight and a second time daemon's packaging sitting next to chrony. `[?]`
+
+---
+
+## 10. DGNSS — a survey tool, not part of the running configuration
+
+Decided 2026-09-11 after wiring the Maanmittauslaitos FinnPos DGNSS feed up and
+getting corrections as far as the receiver. Recorded here because the instinct that
+corrections should help a timing receiver — and should help *more* once it is a properly
+surveyed base station — is reasonable, wrong, and worth not re-litigating.
+
+### The service
+
+`opencaster.nls.fi:2102`, mountpoint `DGNSS-MSM1`, RTCM 3.2 MSM1: 1006 station ARP,
+1071/1081/1091/1121 observations for GPS/GLONASS/Galileo/BeiDou. Free, registration
+required. **Code-differential, about 0.5 m at best** — not RTK. Credentials live in
+`.dgnss`, gitignored, never in gpsd's config or command line.
+
+### Why it does not belong in the steady state
+
+**A base station does not consume corrections.** In TMODE fixed the position is held
+constant by definition, so there is no position solution left for corrections to improve,
+and the receiver ignores incoming RTCM. Surveying the position properly makes the rig a
+better *source* of corrections for other people, not a better consumer of them.
+
+**And if they were applied, they would corrupt the time solution.** A code correction is
+formed at the reference station as *measured pseudorange − computed range*, and that
+difference contains the base receiver's own clock offset, common to every satellite in
+the set. For **positioning** this is harmless: the rover's clock is a nuisance parameter,
+the base clock is absorbed into it, and the position comes out right. For **timing** the
+clock is the answer, so applying those corrections would make the rig traceable to a
+FinnRef station's clock instead of to UTC — importing an unknown offset directly into the
+quantity being measured. DGNSS trades clock accuracy for position accuracy, which is
+exactly the wrong direction here.
+
+So DGNSS is only ever useful during the **survey window**, where the rig runs as a rover
+and the base-clock nuisance is harmless because the rover clock is discarded anyway.
+
+### What actually stopped it working, for the record
+
+Corrections reached the receiver intact and were still never applied. Three measurement
+points:
+
+- Decoding the caster's raw byte stream: 1006 and 1008 present, 7 each in 75 s, plus the
+  observations at 1 Hz. The service is fine.
+- `UBX-RXM-RTCM` on the receiver: 1013, 1030, 1031, 1033, 1230, 1303, 1304 all arriving
+  at the expected 4 per 40 s with `flags=0x0`, i.e. good CRC — but **never 1006 or 1008**.
+  Exactly the two reference-station messages go missing across gpsd's relay while
+  everything else passes.
+- `UBX-NAV-PVT` therefore stayed at `flags=0x1`: `gnssFixOK` set, `diffSoln` clear, `hAcc`
+  ~1.9 m, no differential improvement.
+
+Without the station ARP the receiver cannot form a differential solution, so the
+observations are useless on their own. `[meas]`
+
+Three gpsd limitations were found getting that far, none of them documented anywhere
+obvious:
+
+1. **gpsd's own `ntrip://` refuses the stream.** Its format table has `RTCM 3.2` with a
+   space and `RTCM32`, but not `RTCM3.2` — which is exactly what the caster advertises.
+   Authentication and sourcetable parsing both succeed; it then rejects a stream it is
+   perfectly capable of handling.
+2. **A plain `tcp://` device is never relayed.** gpsd gates the RTCM relay on the device's
+   *service type*, not on the packet type, so the bytes arrive and stop there.
+3. **`dgpsip://` drops the port** from the URL and expects a handshake of its own.
+
+`tools/ntrip-relay` works around the first by pulling from the real caster and re-serving
+the identical bytes as a minimal local NTRIP caster advertising the spelling gpsd accepts.
+That gets gpsd relaying — and is where the 1006/1008 loss shows up. Its `--serial` option
+writes RTCM straight to the receiver instead, which is the right way to bypass the relay
+entirely (gpsd runs `--passive` and never writes to the port, so there is no contention
+over writes); it does not help here because **gpsd holds the port exclusively (`TIOCEXCL`)
+and the open fails with `EBUSY`**. Making that work would mean restructuring so the relay
+owns the port and gpsd reads a pty behind it — a new failure point in the data path, for a
+service capped at 0.5 m. Not worth it.
+
+### What is worth it instead
+
+`UBX-RXM-RAWX` is logged throughout the survey. That feeds a **PPP** solution — RINEX to
+a free service such as NRCan CSRS-PPP — good to centimetres, so ~0.1 ns, against the
+~1.7 ns floor that 0.5 m code corrections would have given.
+
+PPP is the right endgame for precisely the reason DGNSS is the wrong one: it uses precise
+satellite orbit and clock products referenced to a global timescale, applied after the
+fact, so nothing borrows another receiver's clock. `[plan]`
+
+### Tooling added
+
+| Tool | Purpose |
+|---|---|
+| `tools/gpsstat` | one-screen health of the whole chain, exit-coded for cron (§9) |
+| `tools/ubx-dump-config` | full CFG dump, both layers, paged — the backup in `config/` |
+| `tools/ubx-apply-config` | apply a key/value file, verifying every write by readback |
+| `tools/f9t-survey` | run the position survey and freeze the result back into TMODE |
+| `tools/ntrip-relay` | NTRIP client and local re-caster; unused in steady state |
+
+Two traps these encode, both of which cost real time:
+
+- **`ubxtool` must name its gpsd device** whenever more than one is attached, or gpsd
+  answers `No path specified in DEVICE, but multiple devices are attached` and every
+  readback silently returns empty. This first appeared as a survey that *reported*
+  disabling TMODE while changing nothing. The readback caught it; without it, hours of
+  data would have been logged in the wrong mode.
+- **`UBX-CFG-VALGET` returns at most 64 items**, so any dump of a large group must page
+  with the `position` field. The first backup silently truncated `CFG-MSGOUT` to 64 of its
+  561 keys — useless for exactly the group most likely to need restoring.
