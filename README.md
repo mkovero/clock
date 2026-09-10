@@ -932,6 +932,49 @@ the rack move.
     USB bridge remains a candidate, but is explicitly deferred; it does not block the
     rack move or timing work.
 
+### Open — receiver configuration, once the antenna is finally sited
+
+14. **Only GPS and Galileo E1 are actually live.** `[meas]` The per-constellation master
+    switches are misleading: `CFG-SIGNAL-{SBAS,BDS,QZSS,GLO}_ENA` all read 1, but every
+    signal underneath them reads 0, so they contribute nothing. What is genuinely
+    enabled is `GPS_L1CA`, `GPS_L2C`, `GAL_E1` — confirmed both from config and from the
+    sky view, which only ever shows gnssId 0 and 2.
+
+    So **GPS is dual-frequency and Galileo is not.** For timing that ordering matters
+    more than constellation count: L1+L2C gives an ionosphere-free combination, which is
+    the dominant residual error at this level. **Enabling `GAL_E5B` is the single
+    highest-value change** — it buys Galileo the same treatment. Adding GLONASS or BeiDou
+    afterwards helps DOP but not accuracy, and costs UART bandwidth (§9): `UBX-NAV-SAT`
+    grows with satellite count, and the serial cycle is already landing ~250 ms late at
+    38400. Raise the baud first if constellations are added. `[plan]`
+
+15. **Survey the antenna position properly with RTK, then freeze it.** `[plan]` In TMODE
+    fixed the receiver treats the configured position as truth, so error in that position
+    maps almost directly into a *constant time bias* — roughly **3.3 ns per metre**.
+
+    Current stored value is `CFG-TMODE-LAT 601796447`, `LON 249586922`,
+    `HEIGHT 1900` (cm) plus the HP fields, i.e. 60.1796447°, 24.9586922°, 19.00 m. The
+    horizontal figures look like a survey-in product; **the height is exactly 19.00 m**,
+    which is an entered round number, not something a survey returned. If it is wrong by
+    a couple of metres that is ~7 ns of bias — more than twice the receiver's own
+    reported `tAcc` of 3 ns, and a systematic error, so unlike jitter it never averages
+    out.
+
+    The fix is a one-off, not a subscription: take RTK corrections (Maanmittauslaitos /
+    FinnRef NTRIP), run the receiver as a rover until it reports an RTK *fixed* solution,
+    average, write the result back into `CFG-TMODE-*` and turn the corrections off again.
+    Continuous RTK buys nothing afterwards — with the position known and GPS already
+    dual-frequency, there is no remaining error for the corrections to remove.
+
+    Sequencing: this is worth doing **only after the antenna is in its final position**
+    (§7 item 10), since re-siting invalidates both the survey and the cable delay.
+
+    Two practical snags to expect. gpsd owns `/dev/ttyAMA0` and runs with `--passive`, so
+    it will not write to the receiver; injecting RTCM means letting gpsd carry an NTRIP
+    source or giving up the port for the duration. And the receiver is presently *emitting*
+    RTCM3 itself — a side effect of TMODE fixed making it an RTK base — which is pure
+    UART load here and could be turned off regardless.
+
 ### Connector construction note
 
 At 10 MHz wavelength in coax is ~20 m, so few centimetres of unmatched junction is
@@ -1127,7 +1170,16 @@ to a few hundred µs and steering nicely. Nothing was wrong except that the GNSS
 contributing nothing to it. The one number that gave it away was `Reach 0` on the two
 refclocks, which `tracking` does not show at all.
 
-Current state on this rig: everything OK except the standing RTC warning.
+It also reports accuracy from both ends: the receiver's own `UBX-NAV-TIMEGPS` `tAcc`
+(3 ns on this rig), chrony's `PPS2` standard deviation (26–28 ns), and the bound chrony
+actually guarantees for the system clock, root dispersion + root delay/2 (~43 µs). Note
+that `RMS offset` in `chronyc tracking` is a long decay average and stays large for hours
+after a step, so it is the wrong number to judge current health by — the std dev is the
+honest one.
+
+The dead RTC is reported as `NOTE` rather than `WARN`: known, on the list, and
+deliberately not counted against the exit code so that a non-zero exit stays meaningful
+for things that are actually news.
 
 ### Housekeeping seen in passing
 

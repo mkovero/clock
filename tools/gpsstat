@@ -24,6 +24,9 @@ fi
 ok()   { printf '  %sOK%s    %s\n'   "$G" "$N" "$*"; }
 warn() { printf '  %sWARN%s  %s\n'   "$Y" "$N" "$*"; [ "$RC" -lt 1 ] && RC=1; return 0; }
 fail() { printf '  %sFAIL%s  %s\n'   "$R" "$N" "$*"; RC=2; return 0; }
+# note() is for known, accepted conditions: reported every run so they do not get
+# forgotten, but deliberately not counted against the exit code.
+note() { printf '  %sNOTE%s  %s\n'   "$B" "$N" "$*"; }
 head_() { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
 
 VERBOSE=0
@@ -124,6 +127,23 @@ if timeout 8 gpspipe -w -n 40 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.jso
 	printf '  time %s | leap %s | sats %s used / %s seen | PDOP %s TDOP %s\n' \
 		"$GTIME" "$LEAPS" "$USAT" "$NSAT" "$PDOP" "$TDOP"
 
+	# Which constellations are actually contributing, not merely enabled. u-blox
+	# gnssId: 0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 4 IMES, 5 QZSS, 6 GLONASS.
+	if [ -n "${SKY:-}" ]; then
+		CONST=""
+		while IFS=: read -r gid n; do
+			[ -z "$gid" ] && continue
+			case "$gid" in
+				0) gname=GPS ;;     1) gname=SBAS ;;    2) gname=Galileo ;;
+				3) gname=BeiDou ;;  4) gname=IMES ;;    5) gname=QZSS ;;
+				6) gname=GLONASS ;; *) gname="gnss$gid" ;;
+			esac
+			CONST="$CONST  $gname $n"
+		done < <(jq -r '[.satellites[]? | select(.used==true) | .gnssid // 0]
+		                | group_by(.) | map("\(.[0]):\(length)") | .[]' <<<"$SKY" 2>/dev/null)
+		printf '  constellations in solution:%s\n' "${CONST:-  none}"
+	fi
+
 	case "$MODE" in
 		3) ok "3D fix" ;;
 		2) warn "2D fix only" ;;
@@ -145,6 +165,39 @@ else
 	fail "gpsd returned no data on the socket"
 fi
 
+# ---------------------------------------------------------------- accuracy
+
+head_ "accuracy"
+
+# Receiver's own estimate, from UBX-NAV-TIMEGPS. Read-only: -w just decodes the
+# 1 Hz stream, it does not poll the receiver. NAV-PVT also carries a tAcc and it
+# is a different, looser number, so anchor the grep to the TIMEGPS block.
+TACC=$(export UBXOPTS="-P 29.00"; timeout 6 ubxtool -w 4 2>/dev/null \
+	| grep -A1 'UBX-NAV-TIMEGPS' | grep -oE 'tAcc [0-9]+' | tail -1 | awk '{print $2}')
+if [ -n "${TACC:-}" ]; then
+	printf '  receiver time accuracy (NAV-TIMEGPS tAcc) : %s ns\n' "$TACC"
+	[ "$TACC" -le 50 ] && ok "receiver time solution tight" \
+		|| warn "receiver tAcc ${TACC} ns is loose for a timing receiver"
+else
+	warn "could not read NAV-TIMEGPS tAcc"
+fi
+
+# chrony's view. Std Dev on PPS2 is the honest short-term number; RMS offset in
+# `tracking` is a long decay average and stays large for hours after a step.
+STATS=$(chronyc -n sourcestats 2>/dev/null | awk '$1=="PPS2"{print $7, $8}')
+if [ -n "${STATS:-}" ]; then
+	printf '  chrony PPS2 offset / std dev              : %s\n' "$STATS"
+fi
+
+# Bound chrony guarantees on the system clock: dispersion plus half the round trip.
+if [ -n "${TRACK:-}" ]; then
+	RD=$(awk -F': *' '/^Root delay/{print $2+0}' <<<"$TRACK")
+	RDISP=$(awk -F': *' '/^Root dispersion/{print $2+0}' <<<"$TRACK")
+	MAXERR=$(awk -v d="${RD:-0}" -v p="${RDISP:-0}" 'BEGIN{printf "%.9f", p + d/2}')
+	printf '  system clock max error (disp + delay/2)   : %s s\n' "$MAXERR"
+	printf '  chrony RMS offset (long-term average)     : %s\n' "${RMS:-?}"
+fi
+
 # ---------------------------------------------------------------- hardware
 
 head_ "hardware / boot"
@@ -156,8 +209,10 @@ if sudo -n true 2>/dev/null; then DMESG="sudo -n dmesg"; else DMESG="dmesg"; fi
 # SIGPIPE and the whole pipeline reports failure, so the test never fires.
 RTC_POWERLOSS=$($DMESG 2>/dev/null | grep -c 'rtc.*Power loss detected' || true)
 if [ "${RTC_POWERLOSS:-0}" -gt 0 ]; then
-	warn "RTC lost power (no backup cell) — clock steps at every cold boot, which"
-	printf '        is what silently kills gpsd SHM. Fit a cell to the IO board RTC.\n'
+	# Known and accepted: a cell is on the list. Reported, not counted, so the exit
+	# code stays meaningful for the things that are actually news.
+	note "RTC has no backup cell — clock steps at every cold boot, which is what"
+	printf '        silently kills gpsd SHM. Restart gpsd after a cold boot until fixed.\n'
 elif [ "$(cat /sys/class/rtc/rtc0/hctosys 2>/dev/null || echo 0)" = "1" ]; then
 	ok "system clock was set from the RTC at boot"
 else
@@ -187,6 +242,15 @@ if [ "$VERBOSE" = "1" ]; then
 		| grep -iE 'CFG-TMODE-(MODE|POS_TYPE|HEIGHT|LAT|LON)/' | sed 's/^ */  /'
 	timeout 25 ubxtool -g CFG-TP,0 2>/dev/null \
 		| grep -iE 'CFG-TP-(PULSE_DEF|ANT_CABLEDELAY|PERIOD_TP2|LEN_TP2|USE_LOCKED_TP2|TP2_ENA)/' | sed 's/^ */  /'
+	# Per-signal enables, not the per-constellation master switches: a constellation
+	# whose master switch is on but whose every signal is off contributes nothing.
+	printf '  signals enabled:'
+	timeout 25 ubxtool -g CFG-SIGNAL,0 2>/dev/null \
+		| awk '/CFG-SIGNAL-.*_ENA\/.* val 1/ {
+			match($0, /CFG-SIGNAL-[A-Z0-9_]+_ENA/);
+			n = substr($0, RSTART+11, RLENGTH-15);
+			if (n !~ /^(GPS|SBAS|GAL|BDS|QZSS|GLO)$/) printf " %s", n }'
+	echo
 fi
 
 # ---------------------------------------------------------------- verdict
