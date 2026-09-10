@@ -51,13 +51,27 @@
 //   reg 0 bit 4  LOS_CLKIN   no signal on CLKIN
 //   reg 0 bit 5  LOL_A       PLLA not locked
 //
-// FOUR states, not two. Neither an I2C failure nor a corrupted reading is a
+// FIVE states, not two. Neither an I2C failure nor a corrupted reading is a
 // reference failure, and neither may change the output state:
 //
+//   not configured     -> force CLK4 off, retry si5351Init() (see below)
 //   comm failed        -> hold whatever CLK4 was doing, count the error
 //   reading rejected   -> hold, count separately (see below)
 //   reference bad      -> disable after BAD_READS_TO_DISABLE consecutive polls
 //   reference good     -> enable after GOOD_READS_TO_ENABLE consecutive polls
+//
+// "Not configured" is its own state because it is not a reference fault and
+// must never be treated as one. si5351Init() can fail - the device can be
+// absent, or stuck asserting SYS_INIT - and if it does, PLLA, MS4, reg 15
+// (CLKIN as PLL source) and reg 20 (drive) were never written. Enabling reg 3
+// on such a part does not produce 54 MHz, it lets whatever the unprogrammed
+// MultiSynth is doing out of the pin: the exact failure mode the gating exists
+// to prevent, arrived at from the other direction. So the output is forced off
+// and held off, unconditionally, until an init actually succeeds.
+//
+// Earlier versions leaned on SYS_INIT being part of the "reference good" test
+// to cover this by accident. It no longer is (see readStatus), so the
+// interlock is now explicit and does not depend on any status bit.
 //
 // The first version of this sketch returned 0xFF from a failed read, which is
 // indistinguishable from a register with every fault bit set. Single bus
@@ -94,6 +108,25 @@
 // running at the free-VCO frequency - exactly the failure this sketch exists
 // to prevent. So after CONTRADICTIONS_TO_TRUST consecutive rejections the
 // check stands down, the reading is believed, and the bypass is logged.
+//
+// The stand-down LATCHES. It is released only by a sample that is not
+// contradictory at all - not by the next poll, and not by the bypassed sample
+// itself. Resetting the run counter on the bypassed poll re-armed the check
+// immediately and produced a repeating 8-reject / 1-accept cycle: the sketch
+// then acted on status one poll in nine and took ~2.5 s rather than ~0.5 s to
+// notice a real reference loss, while the panel LEDs sat frozen in between.
+//
+// A second, independent integrity check, which needs no assumption about
+// sticky behaviour at all: reg 0 bits 2:0 are REVID, a constant for the life
+// of the part. si5351Init() latches the value it reads; any later sample whose
+// REVID disagrees contains a bit error, by definition, and is discarded.
+// This is what actually caught the historical reg0 = 0xC1 - 0xC0 and 0xC1
+// differ only in bit 0, which is REVID, not a fault bit.
+//
+// If REVID disagrees for REVID_MISMATCHES_TO_REINIT consecutive polls, the
+// conclusion is not "noisy bus" but "this is not the device that was
+// configured" - a hot-swap, a brown-out, an undervolt reset. That drops
+// g_initOk, which forces CLK4 off and re-runs si5351Init().
 //
 // Bus hardening on the hardware side: the poll rate is 4 Hz, so bus speed is
 // irrelevant and SCL runs at 100 kHz rather than 400 kHz. The Teensy 4.0's
@@ -174,8 +207,25 @@ static const uint8_t  BAD_READS_TO_DISABLE = 2;    // ignore single-poll blips
 static const uint8_t  FAULT_MASK           = 0x30;
 
 // Consecutive rejected samples after which the cross-check stands down and the
-// reading is believed. ~2 s at the default poll interval. See the header note.
+// reading is believed. ~2 s at the default poll interval. The stand-down then
+// latches until a clean sample arrives. See the header note.
 static const uint8_t  CONTRADICTIONS_TO_TRUST = 8;
+
+// Reg 0 bits 2:0, device revision. Constant for the life of the part, so a
+// sample that disagrees with the value latched at init is a transit error.
+static const uint8_t  REVID_MASK           = 0x07;
+
+// Consecutive REVID mismatches after which the part is assumed to have been
+// reset or replaced rather than merely misread, forcing a re-init.
+static const uint8_t  REVID_MISMATCHES_TO_REINIT = 4;
+
+// How long to wait between attempts to re-run si5351Init() after a failure.
+// Slow on purpose: a missing device should not flood the log or the bus.
+static const uint32_t INIT_RETRY_MS        = 2000;
+
+// Consecutive polls with no usable status before the REF LED says so. Two
+// polls (~0.5 s) keeps a single rejected sample from flickering the panel.
+static const uint8_t  BLIND_RUNS_TO_SHOW   = 2;
 
 // Set false to make a genuine loss of CLKIN report only, leaving CLK4 running
 // at whatever the free-running VCO produces. Default true: a stopped CM4 is
@@ -313,6 +363,14 @@ static void setMultiSynth(uint8_t index, uint32_t a, uint32_t b, uint32_t c,
   siWriteBurst(42 + 8 * index, r, 8);
 }
 
+// ---- device identity --------------------------------------------------------
+//
+// Declared above si5351Init() rather than with the rest of the status state so
+// that init can latch REVID; the .ino preprocessor will not reorder these.
+
+static uint8_t g_revid       = 0xFF;  // reg 0 bits 2:0, latched at init
+static bool    g_revidKnown  = false;
+
 // ---- init -------------------------------------------------------------------
 
 static bool si5351Init() {
@@ -321,6 +379,13 @@ static bool si5351Init() {
   while (siRead(0) & 0x80) {
     if (millis() - t0 > 100) return false;   // no device / stuck on SYS_INIT
   }
+
+  // 0. Latch REVID before touching anything. A failed read here means there is
+  //    no device to configure, so there is nothing to do but report it.
+  uint8_t idReg;
+  if (!siReadOk(0, idReg)) return false;
+  g_revid      = idReg & REVID_MASK;
+  g_revidKnown = true;
 
   siWrite(3, OE_ALL_OFF);                    // 1. all outputs off
   for (uint8_t r = 16; r <= 23; r++) siWrite(r, 0x80);   // 2. drivers down
@@ -377,9 +442,19 @@ static bool     g_refGood  = false;
 static bool     g_commOk   = false;
 static bool     g_dataOk   = false;
 static bool     g_bypassed = false;   // cross-check stood down this poll
+static bool     g_bypassLatched  = false; // ...and stays down until a clean read
 static uint32_t g_commErrs = 0;
 static uint32_t g_dataErrs = 0;
+static uint32_t g_revidErrs = 0;      // subset of dataErrs: REVID disagreed
 static uint8_t  g_contradictions = 0; // consecutive rejected samples
+static uint8_t  g_revidMismatches = 0; // consecutive REVID disagreements
+
+// Set by setup() and by the retry in loop(). False means PLLA, MS4, reg 15 and
+// reg 20 are NOT known to hold the frequency plan, so the output must stay off
+// whatever the status bits say.
+static bool     g_initOk   = false;
+static uint32_t g_initFails = 0;
+static uint32_t g_lastInitAttempt = 0;
 
 static void readStatus() {
   uint8_t r0, r1;
@@ -390,28 +465,50 @@ static void readStatus() {
     return;                  // leave previous flags alone; caller holds state
   }
 
+  // Identity check first: REVID is constant, so this needs no assumption about
+  // how the part latches anything. A disagreement is a bit error, full stop.
+  if (g_revidKnown && (r0 & REVID_MASK) != g_revid) {
+    g_revidErrs++;
+    g_dataErrs++;
+    g_dataOk = false;
+    g_reg0   = r0;
+    g_sticky = r1;
+    if (g_revidMismatches < REVID_MISMATCHES_TO_REINIT) g_revidMismatches++;
+    if (g_revidMismatches >= REVID_MISMATCHES_TO_REINIT) {
+      // Not a misread any more. Treat it as a different or reset device: drop
+      // the configured flag so loop() forces CLK4 off and re-runs init.
+      g_initOk = false;
+    }
+    return;                  // decision flags untouched; caller holds state
+  }
+  g_revidMismatches = 0;
+
   // Cross-check: a live fault with a clear sticky counterpart cannot happen.
   bool contradictory = (r0 & FAULT_MASK & ~r1) != 0;
 
-  if (contradictory && g_contradictions < CONTRADICTIONS_TO_TRUST) {
-    g_contradictions++;
-    g_dataErrs++;
-    g_dataOk = false;
-    g_reg0   = r0;           // keep the raw bytes for the log
-    g_sticky = r1;
-    // Deliberately NOT clearing reg 1: the sticky evidence accumulates for the
-    // next poll, which is what makes the following comparison stronger.
-    return;                  // decision flags untouched; caller holds state
-  }
-
   if (contradictory) {
+    if (!g_bypassLatched && g_contradictions < CONTRADICTIONS_TO_TRUST) {
+      g_contradictions++;
+      g_dataErrs++;
+      g_dataOk = false;
+      g_reg0   = r0;         // keep the raw bytes for the log
+      g_sticky = r1;
+      // Deliberately NOT clearing reg 1: the sticky evidence accumulates for
+      // the next poll, which is what makes the next comparison stronger.
+      return;                // decision flags untouched; caller holds state
+    }
     // Rejected too many times in a row. Either the bus is badly broken or the
     // sticky assumption is wrong on this part. Believe the reading rather than
-    // risk holding CLK4 on through a real reference loss.
-    g_bypassed = true;
+    // risk holding CLK4 on through a real reference loss - and keep believing
+    // it, so the check cannot re-arm and start rejecting again next poll.
+    g_bypassLatched = true;
+    g_bypassed      = true;
+  } else {
+    // A clean sample is the only thing that re-arms the cross-check.
+    g_bypassLatched  = false;
+    g_contradictions = 0;
   }
 
-  g_contradictions = 0;
   g_dataOk   = true;
   g_reg0     = r0;
   g_sticky   = r1;
@@ -440,6 +537,7 @@ static uint8_t goodRuns     = 0;
 static uint8_t badRuns      = 0;
 static bool    lastRbLocked = false;
 static bool    firstReport  = true;
+static uint8_t blindRuns    = 0;   // consecutive polls with no usable status
 
 static void setClk4(bool on) {
   if (on == clk4Enabled) return;
@@ -461,6 +559,19 @@ static void setClk4(bool on) {
   clk4Enabled = on;
 }
 
+// Unconditional off, bypassing the clk4Enabled cache. Used when the device is
+// not known to be configured: the cache describes what this sketch last wrote,
+// which says nothing about a part that has just reset or was never programmed.
+static void forceClk4Off() {
+  siWrite(3, OE_ALL_OFF);
+  if (clk4Enabled) {
+    Log.println("CLK4: DISABLED (device not configured - holding output off)");
+  }
+  clk4Enabled = false;
+  goodRuns    = 0;
+  badRuns     = 0;
+}
+
 static void report(bool rbLocked) {
   Log.print("reg0=0x");     Log.print(g_reg0, HEX);
   Log.print(" SYS_INIT=");  Log.print(g_sysInit);
@@ -470,16 +581,29 @@ static void report(bool rbLocked) {
   Log.print(" Rb=");        Log.print(rbLocked ? "LOCKED" : "UNLOCKED");
   Log.print(" CLK4=");      Log.print(clk4Enabled ? "on" : "off");
   Log.print(" i2cErr=");    Log.print(g_commErrs);
-  Log.print(" dataErr=");   Log.println(g_dataErrs);
+  Log.print(" dataErr=");   Log.print(g_dataErrs);
+  Log.print(" revidErr=");  Log.print(g_revidErrs);
+  Log.print(" init=");      Log.println(g_initOk ? "ok" : "FAILED");
 
+  if (!g_initOk) {
+    Log.print("  !! Si5351 not configured - CLK4 forced off, init attempts=");
+    Log.println(g_initFails);
+  }
   if (!g_commOk)  Log.println("  !! I2C read failed (output state held)");
-  if (g_commOk && !g_dataOk) {
+  // A rejection is either a REVID mismatch or a sticky contradiction, never
+  // both - the REVID check returns first. Report whichever one fired.
+  if (g_commOk && !g_dataOk && !g_revidMismatches) {
     Log.print("  !! reading rejected: reg0 fault with clear sticky "
               "(output state held), run=");
     Log.println(g_contradictions);
   }
   if (g_bypassed) Log.println("  !! sticky cross-check bypassed after "
-                              "repeated rejections - reading believed");
+                              "repeated rejections - reading believed "
+                              "(latched until a clean sample)");
+  if (g_revidMismatches) {
+    Log.print("  !! REVID mismatch: expected 0x"); Log.print(g_revid, HEX);
+    Log.print(" run="); Log.println(g_revidMismatches);
+  }
   if (g_losClkin) Log.println("  !! no signal on CLKIN");
   if (g_lolA)     Log.println("  !! PLLA not locked");
   if (g_sysInit)  Log.println("  !! SYS_INIT set (reported only, not gated on)");
@@ -509,22 +633,54 @@ void setup() {
   Wire.setClock(100000);
   delay(10);
 
-  if (!si5351Init()) {
-    Log.println("Si5351 not responding at 0x60");
-    return;
+  // A failed init is NOT fatal and must NOT return: loop() has to keep running
+  // so that the output stays forced off, the LEDs keep saying so, and init is
+  // retried. Returning here left loop() driving a chip nobody had configured.
+  g_lastInitAttempt = millis();
+  g_initOk = si5351Init();
+  if (!g_initOk) {
+    g_initFails++;
+    Log.println("Si5351 not responding at 0x60 - CLK4 held off, will retry");
   }
 
   Log.println("Si5351C: CLKIN 10 MHz -> PLLA 864 MHz -> CLK4 54 MHz");
-  Log.println("CLK4 gated on LOS_CLKIN / LOL_A. BIT on pin 2 = indication only.");
+  Log.println("CLK4 gated on LOS_CLKIN / LOL_A, and on init having succeeded.");
+  Log.println("BIT on pin 2 = indication only.");
   Log.println("I2C 100 kHz. i2cErr = failed transactions, dataErr = readings "
-              "rejected by the reg0/reg1 sticky cross-check.");
+              "rejected by the REVID or reg0/reg1 sticky checks, revidErr = "
+              "the REVID subset of those.");
 }
 
 void loop() {
+  // An unconfigured part is the one case where the output is driven rather
+  // than held: reg 3 is written off every pass, because a device that has just
+  // reset does not remember being disabled and its POR default is not 54 MHz.
+  if (!g_initOk) {
+    forceClk4Off();
+    if (millis() - g_lastInitAttempt >= INIT_RETRY_MS) {
+      g_lastInitAttempt = millis();
+      g_initFails++;
+      g_initOk = si5351Init();
+      Log.print("Si5351 re-init ");
+      Log.print(g_initOk ? "OK" : "FAILED");
+      Log.print("  attempts="); Log.println(g_initFails);
+      if (g_initOk) {
+        // Nothing about the old status survives a reconfigure.
+        g_contradictions = 0;
+        g_bypassLatched  = false;
+      }
+    }
+  }
+
   readStatus();
   bool locked = rubidiumLocked();
 
-  if (!g_commOk || !g_dataOk) {
+  if (!g_initOk) {
+    // Normally already forced off above - but readStatus() can clear g_initOk
+    // mid-pass when REVID says the part reset, so force it again rather than
+    // leave an unconfigured device driving CLK4 for a poll.
+    forceClk4Off();
+  } else if (!g_commOk || !g_dataOk) {
     // Neither a bus failure nor a corrupted reading tells us anything about
     // the reference. Hold the output where it is and do not touch the run
     // counters.
@@ -540,20 +696,40 @@ void loop() {
 
   // Panel indicators.
   //
-  //   REF  solid  - CLKIN present and PLLA locked, CLK4 live
-  //        blink  - CLKIN present but PLLA not locked (settling, or a
-  //                 reference the PLL cannot use)
-  //        off    - no signal on CLKIN: cable, DA or AR-40A
+  //   REF  solid       - CLKIN present and PLLA locked, CLK4 live
+  //        slow blink  - CLKIN present but PLLA not locked (settling, or a
+  //                      1 Hz          reference the PLL cannot use)
+  //        fast blink  - NO USABLE STATUS: init failed, the bus is down, or
+  //        4 Hz          readings are being rejected. Says nothing about the
+  //                      reference - it says the sketch cannot see it.
+  //        off         - no signal on CLKIN: cable, DA or AR-40A
   //
   //   LOCK solid  - AR-40A reports locked
   //        off    - warm-up or holdover; the reference is running on the
   //                 free OCXO and is not yet rubidium-disciplined
   //
   // Together: REF off is a broken signal path. REF solid with LOCK off is a
-  // working path on an undisciplined reference.
+  // working path on an undisciplined reference. REF fast is a Teensy-side or
+  // I2C problem, and CLK4 is held wherever it was (or forced off, if the
+  // device was never configured).
+  //
+  // The fast state exists because the status globals initialise fault-set and
+  // are only updated by a good read. Without it, a dead I2C bus and a genuinely
+  // absent reference both showed REF off and were indistinguishable on the
+  // panel - which is what a bench indicator is for.
   bool slowBlink = (millis() / 500) & 1;
+  bool fastBlink = (millis() / 125) & 1;
 
-  if (g_losClkin) {
+  if (!g_initOk || !g_commOk || !g_dataOk) {
+    if (blindRuns < BLIND_RUNS_TO_SHOW) blindRuns++;
+  } else {
+    blindRuns = 0;
+  }
+  bool blind = blindRuns >= BLIND_RUNS_TO_SHOW;
+
+  if (blind) {
+    digitalWrite(LED_REF_PIN, fastBlink);
+  } else if (g_losClkin) {
     digitalWrite(LED_REF_PIN, LOW);
   } else if (g_lolA) {
     digitalWrite(LED_REF_PIN, slowBlink);
