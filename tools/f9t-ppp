@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# f9t-ppp — turn the survey's raw UBX log into RINEX for a PPP solution.
+#
+#   f9t-ppp [logfile] [outdir]
+#
+# Why PPP rather than the survey average, or DGNSS:
+#
+# The standalone average in f9t-survey is limited by multipath, which is tied to
+# satellite geometry and so repeats on a sidereal day. It bottoms out around
+# 0.3-0.5 m — roughly 1-1.7 ns of time bias at 3.3 ns/m. DGNSS would not have
+# done better and is actively wrong for timing anyway (README section 10):
+# differential corrections carry the reference station's own clock offset.
+#
+# PPP uses precise satellite orbit and clock products referenced to a global
+# timescale, applied after the fact. Nothing borrows another receiver's clock,
+# and it reaches centimetres — about 0.1 ns.
+#
+# The second, larger prize is the receiver clock solution. Nothing on this rig
+# can measure its own absolute time bias: chrony steers the system clock to the
+# PPS, so a constant offset in the PPS is absorbed by the servo and reads as
+# zero. The antenna LNA group delay (typically 10-30 ns, unspecified here) and
+# the receiver's internal delay sit uncompensated in CFG-TP-ANT_CABLEDELAY for
+# the same reason. A PPP clock solution measures the lot, which is the only way
+# to move from calculated to measured below about 10 ns.
+#
+# Submit the RINEX observation file to a free PPP service — NRCan CSRS-PPP is
+# the usual choice — and read back both the coordinates and the clock series.
+
+set -uo pipefail
+
+LOG="${1:-$HOME/f9t-survey/rawx.ubx}"
+OUT="${2:-$HOME/f9t-survey/rinex}"
+
+[ -r "$LOG" ] || { echo "no such log: $LOG" >&2; exit 2; }
+command -v convbin >/dev/null || { echo "convbin missing: apt install rtklib" >&2; exit 2; }
+
+mkdir -p "$OUT" || exit 1
+STAMP=$(date -u -r "$LOG" +%Y%m%d-%H%M)
+BASE="$OUT/aika-$STAMP"
+
+echo "input   $LOG ($(du -h "$LOG" | cut -f1))"
+
+# Sanity-check the log before spending time on it. RXM-RAWX is cls 0x02 id 0x15
+# and must be present at roughly 1 Hz; without it there is nothing to convert.
+python3 - "$LOG" <<'PY'
+import collections, sys
+d = open(sys.argv[1], "rb").read()
+c = collections.Counter()
+i = 0
+while True:
+    i = d.find(b"\xb5\x62", i)
+    if i < 0 or i + 6 > len(d):
+        break
+    ln = d[i+4] | (d[i+5] << 8)
+    c[(d[i+2], d[i+3])] += 1
+    i += 6 + ln + 2
+rawx = c.get((0x02, 0x15), 0)
+sfrbx = c.get((0x02, 0x13), 0)
+print(f"        RXM-RAWX  {rawx} epochs (~{rawx/3600:.1f} h at 1 Hz)")
+print(f"        RXM-SFRBX {sfrbx} records")
+if rawx == 0:
+    sys.exit("        no RXM-RAWX in this log — nothing to convert")
+if rawx < 3600:
+    print("        WARNING: under an hour of data; PPP wants 6 h or more")
+PY
+[ $? -eq 0 ] || exit 1
+
+echo
+echo "converting to RINEX 3.04 ..."
+# -r ubx      input format
+# -v 3.04     RINEX version; CSRS-PPP accepts 2.11 and 3.x
+# -od -os     include Doppler and signal strength
+# -f 2        two frequencies, which is the whole point of this receiver
+# convbin reports progress with carriage returns, one line per epoch, which
+# buries the summary under tens of thousands of "scanning:" fragments. Keep the
+# lines that say what it produced and drop the rest.
+# -hm sets MARKER NAME, which convbin otherwise leaves blank; PPP services show
+# it on the report and it is the only label tying a solution back to this rig.
+convbin "$LOG" -r ubx -v 3.04 -f 2 -od -os -hm aika \
+	-o "$BASE.obs" -n "$BASE.nav" 2>&1 \
+	| tr '\r' '\n' \
+	| grep -avE '^\s*(scanning|reading)' \
+	| grep -avE '^\s*[0-9]{4}/[0-9]{2}/[0-9]{2} ' \
+	| grep -av '^\s*$' | sed 's/^/  /'
+
+echo
+for f in "$BASE.obs" "$BASE.nav"; do
+	[ -s "$f" ] && printf '  %-40s %s\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+done
+
+if [ ! -s "$BASE.obs" ]; then
+	echo "conversion produced no observation file" >&2
+	exit 1
+fi
+
+# The observation file is the submission. Compressing it is worth it: these are
+# highly repetitive text and most services accept gzip.
+gzip -kf "$BASE.obs" 2>/dev/null && \
+	printf '  %-40s %s\n' "$(basename "$BASE.obs").gz" "$(du -h "$BASE.obs.gz" | cut -f1)"
+
+cat <<NOTE
+
+Next:
+
+  1. Submit $BASE.obs.gz to a PPP service.
+     NRCan CSRS-PPP: https://webapp.csrs-scrs.nrcan-rncan.gc.ca/geod/tools-outils/ppp.php
+     Choose ITRF (not NAD83) and static mode.
+
+  2. From the result, take:
+       - the ITRF cartesian/geodetic coordinates, and the ellipsoidal height.
+         Careful: CFG-TMODE-HEIGHT wants height above the ellipsoid, not above
+         the geoid. Mixing them up is a ~17 m error at this latitude, which is
+         ~57 ns.
+       - the receiver clock series. Its offset against the PPP timescale is the
+         rig's absolute time bias — the number nothing else here can measure.
+
+  3. Write the coordinates in with ubx-apply-config, layer 7, e.g.
+
+       CFG-TMODE-LAT        <1e-7 deg>
+       CFG-TMODE-LAT_HP     <1e-9 deg remainder, -99..99>
+       CFG-TMODE-LON        <1e-7 deg>
+       CFG-TMODE-LON_HP     <1e-9 deg remainder, -99..99>
+       CFG-TMODE-HEIGHT     <cm above ellipsoid>
+       CFG-TMODE-HEIGHT_HP  <0.1 mm remainder, -99..99>
+       CFG-TMODE-FIXED_POS_ACC <0.1 mm units, from the PPP sigma>
+
+     No second survey is needed — this is a config write against a receiver
+     already in fixed mode.
+
+  4. If the clock series shows a consistent bias, fold it into
+     CFG-TP-ANT_CABLEDELAY on top of the 40 ns cable term. That converts the
+     antenna LNA and receiver delays from unknown to measured.
+NOTE

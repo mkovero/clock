@@ -1306,6 +1306,33 @@ and the open fails with `EBUSY`**. Making that work would mean restructuring so 
 owns the port and gpsd reads a pty behind it — a new failure point in the data path, for a
 service capped at 0.5 m. Not worth it.
 
+### Verifying the time bias — the part nothing on the rig can do
+
+Worth stating plainly, because `chronyc` looks like it ought to answer it and does not.
+
+chrony measures the PPS against the system clock **and steers the system clock to the
+PPS**. A constant offset in when the pulse occurs is absorbed entirely by the servo, so
+`sourcestats` reports `Offset -0ns` whether the pulse is on time, 35 ns late, or 35 µs
+late. That column reports servo convergence, not accuracy. `Std Dev` (22 ns here) is
+real information — it is jitter, and it is where geometry improvements show — but it
+says nothing about bias either.
+
+The 35 ns cable-delay correction therefore **cannot be observed on this rig**, only
+calculated. It appeared once, as a step at the instant of the write, and even that is
+unrecoverable: the constellation change restarted the GNSS subsystem in the same
+operation and threw a disturbance five orders of magnitude larger (−6202 µs offset,
+20 ms std dev). The NTP servers cannot arbitrate either — MIKES shows ~14 ms root delay
+and ~1 ms sample noise, roughly 10⁵ too coarse.
+
+The same blindness covers the **antenna LNA group delay** (typically 10–30 ns,
+unspecified for this antenna) and the receiver's internal delay. Both sit uncompensated
+inside `CFG-TP-ANT_CABLEDELAY` alongside the 40 ns cable term.
+
+A PPP clock solution measures all of it at once, against a global timescale, with
+nothing borrowing another receiver's clock. That is the only route from *calculated* to
+*measured* below about 10 ns, and it needs no extra hardware — just the RAWX already
+being logged. `[plan]`
+
 ### What is worth it instead
 
 `UBX-RXM-RAWX` is logged throughout the survey. That feeds a **PPP** solution — RINEX to
@@ -1325,6 +1352,7 @@ fact, so nothing borrows another receiver's clock. `[plan]`
 | `tools/ubx-apply-config` | apply a key/value file, verifying every write by readback |
 | `tools/f9t-survey` | run the position survey and freeze the result back into TMODE |
 | `tools/ntrip-relay` | NTRIP client and local re-caster; unused in steady state |
+| `tools/f9t-ppp` | RAWX → RINEX via `convbin`, for submission to a PPP service |
 
 Two traps these encode, both of which cost real time:
 
