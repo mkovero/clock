@@ -621,6 +621,9 @@ static bool rubidiumLocked() {
 // ---- gating state -----------------------------------------------------------
 
 static bool    clk4Enabled  = false;
+static bool    clk4OeKnown  = false;
+static uint8_t clk4OeReg    = OE_ALL_OFF;
+static uint32_t clk4OeErrs  = 0;
 static uint8_t goodRuns     = 0;
 static uint8_t badRuns      = 0;
 static bool    lastRbLocked = false;
@@ -628,23 +631,60 @@ static bool    firstReport  = true;
 static uint8_t blindRuns    = 0;   // consecutive polls with no usable status
 
 static void setClk4(bool on) {
-  if (on == clk4Enabled) return;
+  const uint8_t wanted = on ? OE_CLK4_ONLY : OE_ALL_OFF;
+  if (on == clk4Enabled && clk4OeKnown && clk4OeReg == wanted) return;
   if (on) {
     // Re-lock cleanly before letting the output out: a PLL that has just
     // reacquired its reference benefits from a soft reset.
     siWrite(177, 0x20);
     delay(2);
-    siWrite(3, OE_CLK4_ONLY);
-    Log.print("CLK4: ENABLED  (54 MHz to CM4)  reg0=0x");
+  }
+
+  const char *action = on ? "enable" : "disable";
+  if (!siWrite(3, wanted)) {
+    clk4OeKnown = false;
+    clk4OeErrs++;
+    Log.print("CLK4: "); Log.print(action);
+    Log.println(" FAILED (reg 3 write failed; state unknown)");
+    return;
+  }
+
+  uint8_t actual;
+  if (!siReadOk(3, actual)) {
+    clk4OeKnown = false;
+    clk4OeErrs++;
+    Log.print("CLK4: "); Log.print(action);
+    Log.println(" FAILED (reg 3 readback failed; state unknown)");
+    return;
+  }
+
+  clk4OeKnown = true;
+  clk4OeReg   = actual;
+  // Register 3 is active-low: a clear bit 4 means CLK4 is actually enabled.
+  clk4Enabled = (actual & (1 << 4)) == 0;
+
+  if (actual != wanted) {
+    clk4OeErrs++;
+    Log.print("CLK4: "); Log.print(action);
+    Log.print(" FAILED (reg 3 wanted 0x"); Log.print(wanted, HEX);
+    Log.print(" read 0x"); Log.print(actual, HEX);
+    Log.println(")");
+    return;
+  }
+
+  if (on) {
+    Log.print("CLK4: ENABLED  (54 MHz to CM4)  OE=0x");
+    Log.print(actual, HEX);
+    Log.print(" reg0=0x");
     Log.println(g_reg0, HEX);
   } else {
-    siWrite(3, OE_ALL_OFF);
-    Log.print("CLK4: DISABLED (reference lost - CM4 has no clock)  reg0=0x");
+    Log.print("CLK4: DISABLED (reference lost - CM4 has no clock)  OE=0x");
+    Log.print(actual, HEX);
+    Log.print(" reg0=0x");
     Log.print(g_reg0, HEX);
     Log.print(" sticky=0x");
     Log.println(g_sticky, HEX);
   }
-  clk4Enabled = on;
 }
 
 // Unconditional off, bypassing the clk4Enabled cache. Used when the device is
@@ -656,6 +696,7 @@ static void forceClk4Off() {
     Log.println("CLK4: DISABLED (device not configured - holding output off)");
   }
   clk4Enabled = false;
+  clk4OeKnown = false;
   goodRuns    = 0;
   badRuns     = 0;
 }
@@ -667,7 +708,15 @@ static void report(bool rbLocked) {
   Log.print(" LOS_CLKIN="); Log.print(g_losClkin);
   Log.print(" sticky=0x");  Log.print(g_sticky, HEX);
   Log.print(" Rb=");        Log.print(rbLocked ? "LOCKED" : "UNLOCKED");
-  Log.print(" CLK4=");      Log.print(clk4Enabled ? "on" : "off");
+  Log.print(" CLK4=");
+  Log.print(clk4OeKnown ? (clk4Enabled ? "on" : "off") : "unknown");
+  Log.print(" OE=");
+  if (clk4OeKnown) {
+    Log.print("0x"); Log.print(clk4OeReg, HEX);
+  } else {
+    Log.print("unknown");
+  }
+  Log.print(" oeErr=");     Log.print(clk4OeErrs);
   Log.print(" i2cErr=");    Log.print(g_commErrs);
   Log.print(" dataErr=");   Log.print(g_dataErrs);
   Log.print(" revidErr=");  Log.print(g_revidErrs);
