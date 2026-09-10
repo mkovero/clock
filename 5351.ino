@@ -120,8 +120,53 @@
 // sticky behaviour at all: reg 0 bits 2:0 are REVID, a constant for the life
 // of the part. si5351Init() latches the value it reads; any later sample whose
 // REVID disagrees contains a bit error, by definition, and is discarded.
-// This is what actually caught the historical reg0 = 0xC1 - 0xC0 and 0xC1
-// differ only in bit 0, which is REVID, not a fault bit.
+//
+// REVID does NOT catch the 0xC1 event, and an earlier revision of this comment
+// wrongly claimed it did. Measured on this board: reg 0 reads 0x41 steadily
+// (LOL_B set, PLLB unconfigured; REVID = 001) and the glitch reads 0xC1. Those
+// differ in bit 7 alone. REVID is identical in both. The check is still worth
+// its cost - it catches errors in the low three bits and a swapped part - but
+// bit 7 needs a rule of its own, below.
+//
+// -----------------------------------------------------------------------------
+// WHAT THE STICKY BYTE MEASURED
+//
+// reg 1 reads 0xC0 on every poll, in every reference state observed so far.
+// Decomposed, that settles three things:
+//
+//   LOL_A_STKY, LOS_CLKIN_STKY  clear on every poll
+//     -> the siWrite(1, 0x00) at the end of each poll genuinely clears.
+//
+//   LOL_B_STKY                  set on every poll
+//     -> PLLB is unconfigured and permanently unlocked, and its sticky
+//        re-asserts after every clear. So this part LEVEL-latches: a condition
+//        that is still true re-latches immediately. That is precisely the
+//        assumption the reg0/reg1 cross-check rests on, now measured rather
+//        than assumed, and it means CONTRADICTIONS_TO_TRUST should never fire.
+//
+//   SYS_INIT_STKY               set on every poll
+//     -> but LOL_A_STKY stays clear across the same polls, and a device that
+//        is genuinely re-running its power-up initialisation cannot hold PLLA
+//        locked through it. So SYS_INIT is not actually asserting: bit 7's
+//        sticky is stuck on this part and carries no information at all.
+//        Excluding it from FAULT_MASK was correct.
+//
+// Which leaves bit 7 with no sticky counterpart that can ever contradict it,
+// hence the live-bit rule:
+//
+//   SYS_INIT set AND LOL_A clear  ->  impossible
+//
+// The PLLs are not locked while the device is initialising. A sample showing
+// both is discarded, exactly like a sticky contradiction. This is what catches
+// reg0 = 0xC1 against a steady 0x41 with PLLA locked and CLKIN present
+// throughout - one bit flipped in transit, every other bit unchanged.
+//
+// SYS_INIT is not gated on, so these samples were harmless to the output; they
+// were simply invisible, and dataErr read 0 while the true bit-error rate did
+// not. Counting them is the point.
+//
+// Both live-bit and sticky rejections stand down after their respective
+// run limits, for the same fail-safe reason, and both latch until clean.
 //
 // If REVID disagrees for REVID_MISMATCHES_TO_REINIT consecutive polls, the
 // conclusion is not "noisy bus" but "this is not the device that was
@@ -214,6 +259,16 @@ static const uint8_t  CONTRADICTIONS_TO_TRUST = 8;
 // Reg 0 bits 2:0, device revision. Constant for the life of the part, so a
 // sample that disagrees with the value latched at init is a transit error.
 static const uint8_t  REVID_MASK           = 0x07;
+
+// Live-bit consistency within reg 0: SYS_INIT (bit 7) cannot be set while
+// LOL_A (bit 5) is clear. See the header note. Needs no sticky reasoning.
+static const uint8_t  SYS_INIT_BIT         = 0x80;
+static const uint8_t  LOL_A_BIT            = 0x20;
+
+// Consecutive live-bit rejections after which the rule stands down and the
+// reading is believed. Same fail-safe shape as CONTRADICTIONS_TO_TRUST: a rule
+// that can reject forever would freeze the gating decision forever.
+static const uint8_t  LIVE_REJECTS_TO_TRUST = 8;
 
 // Consecutive REVID mismatches after which the part is assumed to have been
 // reset or replaced rather than merely misread, forcing a re-init.
@@ -446,6 +501,10 @@ static bool     g_bypassLatched  = false; // ...and stays down until a clean rea
 static uint32_t g_commErrs = 0;
 static uint32_t g_dataErrs = 0;
 static uint32_t g_revidErrs = 0;      // subset of dataErrs: REVID disagreed
+static uint32_t g_liveErrs  = 0;      // subset of dataErrs: reg0 self-inconsistent
+static bool     g_liveBypassed = false;   // live-bit rule stood down this poll
+static bool     g_liveLatched  = false;   // ...and stays down until a clean read
+static uint8_t  g_liveRejects  = 0;   // consecutive live-bit rejections
 static uint8_t  g_contradictions = 0; // consecutive rejected samples
 static uint8_t  g_revidMismatches = 0; // consecutive REVID disagreements
 
@@ -458,7 +517,8 @@ static uint32_t g_lastInitAttempt = 0;
 
 static void readStatus() {
   uint8_t r0, r1;
-  g_bypassed = false;
+  g_bypassed     = false;
+  g_liveBypassed = false;
   g_commOk = siReadOk(0, r0) && siReadOk(1, r1);
   if (!g_commOk) {
     g_commErrs++;
@@ -482,6 +542,32 @@ static void readStatus() {
     return;                  // decision flags untouched; caller holds state
   }
   g_revidMismatches = 0;
+
+  // Live-bit rule: the device cannot be running its power-up initialisation
+  // while PLLA reports lock. Catches a bit error on SYS_INIT, which no sticky
+  // comparison can see - bit 7's sticky is permanently asserted on this part,
+  // so it can never contradict anything. See the header note.
+  bool inconsistent = (r0 & SYS_INIT_BIT) && !(r0 & LOL_A_BIT);
+
+  if (inconsistent) {
+    if (!g_liveLatched && g_liveRejects < LIVE_REJECTS_TO_TRUST) {
+      g_liveRejects++;
+      g_liveErrs++;
+      g_dataErrs++;
+      g_dataOk = false;
+      g_reg0   = r0;
+      g_sticky = r1;
+      // Not clearing reg 1, for the same reason as a sticky rejection.
+      return;                // decision flags untouched; caller holds state
+    }
+    // Rejected too many times running. Believe it rather than freeze the
+    // gating decision indefinitely, and keep believing it until a clean read.
+    g_liveLatched  = true;
+    g_liveBypassed = true;
+  } else {
+    g_liveLatched = false;
+    g_liveRejects = 0;
+  }
 
   // Cross-check: a live fault with a clear sticky counterpart cannot happen.
   bool contradictory = (r0 & FAULT_MASK & ~r1) != 0;
@@ -517,10 +603,12 @@ static void readStatus() {
   g_losClkin = (g_reg0 >> 4) & 1;
 
   // SYS_INIT is reported but deliberately NOT gated on. Its sticky is
-  // permanently asserted here, so a bit error in reg 0 bit 7 is undetectable
-  // and would otherwise be two polls away from cutting the CM4's clock.
-  // Startup is already covered: si5351Init() waits for SYS_INIT to clear, and
-  // a genuine device reset would show up on LOL_A as well.
+  // permanently asserted here, so it has no sticky counterpart to be checked
+  // against, and gating on it would put a single flipped bit two polls away
+  // from cutting the CM4's clock. The live-bit rule above now rejects such a
+  // sample rather than acting on it, but the gating stays off bit 7 anyway:
+  // startup is already covered, since si5351Init() waits for SYS_INIT to clear
+  // and a genuine device reset would show up on LOL_A as well.
   g_refGood  = !g_lolA && !g_losClkin;
   siWrite(1, 0x00);          // clear sticky so the next read is fresh
 }
@@ -583,6 +671,7 @@ static void report(bool rbLocked) {
   Log.print(" i2cErr=");    Log.print(g_commErrs);
   Log.print(" dataErr=");   Log.print(g_dataErrs);
   Log.print(" revidErr=");  Log.print(g_revidErrs);
+  Log.print(" liveErr=");   Log.print(g_liveErrs);
   Log.print(" init=");      Log.println(g_initOk ? "ok" : "FAILED");
 
   if (!g_initOk) {
@@ -590,13 +679,21 @@ static void report(bool rbLocked) {
     Log.println(g_initFails);
   }
   if (!g_commOk)  Log.println("  !! I2C read failed (output state held)");
-  // A rejection is either a REVID mismatch or a sticky contradiction, never
-  // both - the REVID check returns first. Report whichever one fired.
-  if (g_commOk && !g_dataOk && !g_revidMismatches) {
+  // A rejection has exactly one cause: the checks run in order and the first
+  // to fire returns. Report whichever one it was.
+  if (g_commOk && !g_dataOk && !g_revidMismatches && !g_liveRejects) {
     Log.print("  !! reading rejected: reg0 fault with clear sticky "
               "(output state held), run=");
     Log.println(g_contradictions);
   }
+  if (g_commOk && !g_dataOk && g_liveRejects) {
+    Log.print("  !! reading rejected: SYS_INIT set with PLLA locked "
+              "(output state held), run=");
+    Log.println(g_liveRejects);
+  }
+  if (g_liveBypassed) Log.println("  !! live-bit rule bypassed after repeated "
+                                  "rejections - reading believed "
+                                  "(latched until a clean sample)");
   if (g_bypassed) Log.println("  !! sticky cross-check bypassed after "
                               "repeated rejections - reading believed "
                               "(latched until a clean sample)");
@@ -646,9 +743,9 @@ void setup() {
   Log.println("Si5351C: CLKIN 10 MHz -> PLLA 864 MHz -> CLK4 54 MHz");
   Log.println("CLK4 gated on LOS_CLKIN / LOL_A, and on init having succeeded.");
   Log.println("BIT on pin 2 = indication only.");
-  Log.println("I2C 100 kHz. i2cErr = failed transactions, dataErr = readings "
-              "rejected by the REVID or reg0/reg1 sticky checks, revidErr = "
-              "the REVID subset of those.");
+  Log.println("I2C 100 kHz. i2cErr = failed transactions. dataErr = readings "
+              "rejected by an integrity check, of which revidErr = REVID "
+              "disagreed and liveErr = SYS_INIT set with PLLA locked.");
 }
 
 void loop() {
@@ -668,6 +765,8 @@ void loop() {
         // Nothing about the old status survives a reconfigure.
         g_contradictions = 0;
         g_bypassLatched  = false;
+        g_liveRejects    = 0;
+        g_liveLatched    = false;
       }
     }
   }
