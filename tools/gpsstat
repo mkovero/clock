@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# gpsstat — one-screen health view of the GNSS / PPS / chrony chain on the CM4.
+#
+# Checks the things that actually break, in the order they break. The failure of
+# 2026-09-10 (dead RTC -> clock step -> gpsd silently stops writing SHM(0) ->
+# both refclocks starve) is invisible from `chronyc tracking` alone, which just
+# shows a healthy stratum-3 clock. This looks at every link.
+#
+#   gpsstat        health summary
+#   gpsstat -v     also read TMODE / TP2 / cable delay back from the receiver (slow)
+#   watch -n5 gpsstat   live view
+#
+# Exit: 0 healthy, 1 degraded, 2 GNSS timing is down.
+
+set -uo pipefail
+
+RC=0
+if [ -t 1 ]; then
+	G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; B=$'\033[1m'; N=$'\033[0m'
+else
+	G=; Y=; R=; B=; N=
+fi
+
+ok()   { printf '  %sOK%s    %s\n'   "$G" "$N" "$*"; }
+warn() { printf '  %sWARN%s  %s\n'   "$Y" "$N" "$*"; [ "$RC" -lt 1 ] && RC=1; return 0; }
+fail() { printf '  %sFAIL%s  %s\n'   "$R" "$N" "$*"; RC=2; return 0; }
+head_() { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
+
+VERBOSE=0
+[ "${1:-}" = "-v" ] && VERBOSE=1
+
+TMP=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMP"' EXIT
+
+# ---------------------------------------------------------------- chrony
+
+head_ "chrony"
+
+if ! command -v chronyc >/dev/null; then
+	fail "chronyc not installed"
+else
+	TRACK=$(chronyc -n tracking 2>/dev/null)
+	SRC=$(chronyc -n sources 2>/dev/null)
+
+	REFID=$(awk -F': *' '/^Reference ID/{print $2}' <<<"$TRACK")
+	STRATUM=$(awk -F': *' '/^Stratum/{print $2}' <<<"$TRACK")
+	SYSTIME=$(awk -F': *' '/^System time/{print $2}' <<<"$TRACK")
+	RMS=$(awk -F': *' '/^RMS offset/{print $2}' <<<"$TRACK")
+	LEAP=$(awk -F': *' '/^Leap status/{print $2}' <<<"$TRACK")
+
+	printf '  ref %s | stratum %s | %s | RMS %s\n' \
+		"${REFID:-?}" "${STRATUM:-?}" "${SYSTIME:-?}" "${RMS:-?}"
+
+	case "$REFID" in
+		*PPS2*) ok "disciplined by PPS2 (GNSS 1 PPS via PHC)" ;;
+		"")     fail "chrony is not tracking anything" ;;
+		*)      warn "tracking $REFID, not PPS2 — GNSS is not steering the clock" ;;
+	esac
+
+	[ "${STRATUM:-9}" = "1" ] || warn "stratum ${STRATUM:-?}, expected 1"
+	[ "${LEAP:-}" = "Normal" ] || warn "leap status ${LEAP:-?}"
+
+	# Refclock reach. '#' prefixes local reference clocks in chronyc sources.
+	while read -r line; do
+		[ -z "$line" ] && continue
+		name=$(awk '{print $2}' <<<"$line")
+		reach=$(awk '{print $5}' <<<"$line")
+		sample=$(awk '{print $7}' <<<"$line" | tr -d '[')
+		if [ "$reach" = "0" ]; then
+			fail "refclock $name unreachable (reach 0) — see 'gpsd' below"
+		elif [ "$reach" = "377" ]; then
+			ok "refclock $name reach 377, last $sample"
+		else
+			warn "refclock $name reach $reach (filling or lossy), last $sample"
+		fi
+	done < <(grep '^#' <<<"$SRC")
+
+	if ! grep -q '^#' <<<"$SRC"; then
+		fail "no refclocks configured in chrony.conf"
+	fi
+fi
+
+# ---------------------------------------------------------------- gpsd SHM
+
+head_ "gpsd -> chrony SHM"
+
+if ! pgrep -x gpsd >/dev/null; then
+	fail "gpsd not running"
+else
+	GPSD_SINCE=$(systemctl show gpsd.service -p ActiveEnterTimestamp --value 2>/dev/null)
+	printf '  gpsd up since %s\n' "${GPSD_SINCE:-unknown}"
+
+	# SHM(0) is root-owned 0600 by gpsd's design, so this needs sudo to observe.
+	# chronyd itself reads it fine: it opens refclocks before dropping privileges.
+	if sudo -n true 2>/dev/null; then
+		sudo -n timeout 4 ntpshmmon -n 3 2>/dev/null | grep -c '^sample NTP0' >"$TMP/n" || true
+		NS=$(cat "$TMP/n" 2>/dev/null || echo 0)
+		if [ "${NS:-0}" -gt 0 ]; then
+			ok "SHM(0) live — $NS samples in 4 s"
+		else
+			fail "gpsd is NOT writing SHM(0) — run: sudo systemctl restart gpsd"
+		fi
+	else
+		warn "no passwordless sudo; cannot read SHM(0) directly"
+	fi
+fi
+
+# ---------------------------------------------------------------- GNSS fix
+
+head_ "GNSS fix"
+
+if timeout 8 gpspipe -w -n 40 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.json" ]; then
+	TPV=$(jq -c 'select(.class=="TPV")' <"$TMP/gps.json" 2>/dev/null | tail -1)
+	SKY=$(jq -c 'select(.class=="SKY" and .uSat != null)' <"$TMP/gps.json" 2>/dev/null | tail -1)
+
+	MODE=$(jq -r '.mode // 0'   <<<"${TPV:-\{\}}" 2>/dev/null)
+	GTIME=$(jq -r '.time // "-"' <<<"${TPV:-\{\}}" 2>/dev/null)
+	LEAPS=$(jq -r '.leapseconds // "-"' <<<"${TPV:-\{\}}" 2>/dev/null)
+	USAT=$(jq -r '.uSat // 0'   <<<"${SKY:-\{\}}" 2>/dev/null)
+	NSAT=$(jq -r '.nSat // 0'   <<<"${SKY:-\{\}}" 2>/dev/null)
+	PDOP=$(jq -r '.pdop // "-"' <<<"${SKY:-\{\}}" 2>/dev/null)
+	TDOP=$(jq -r '.tdop // "-"' <<<"${SKY:-\{\}}" 2>/dev/null)
+
+	printf '  time %s | leap %s | sats %s used / %s seen | PDOP %s TDOP %s\n' \
+		"$GTIME" "$LEAPS" "$USAT" "$NSAT" "$PDOP" "$TDOP"
+
+	case "$MODE" in
+		3) ok "3D fix" ;;
+		2) warn "2D fix only" ;;
+		*) fail "no fix (mode $MODE)" ;;
+	esac
+
+	[ "${USAT:-0}" -ge 6 ] || warn "only ${USAT} satellites used — check antenna siting/sky view"
+
+	# Carrier-to-noise of the satellites actually in the solution. A good rooftop
+	# antenna gives several above 40 dB-Hz; an indoor one struggles past 30.
+	if [ -n "${SKY:-}" ]; then
+		CN0=$(jq -r '[.satellites[]? | select(.used==true) | .ss] | sort | reverse | .[0:4] | map(tostring) | join(" ")' <<<"$SKY" 2>/dev/null)
+		BEST=$(jq -r '[.satellites[]? | select(.used==true) | .ss] | max // 0' <<<"$SKY" 2>/dev/null)
+		printf '  best C/N0 (used): %s dB-Hz\n' "${CN0:-?}"
+		awk -v b="${BEST:-0}" 'BEGIN{exit !(b>=35)}' && ok "signal level healthy" \
+			|| warn "peak C/N0 ${BEST} dB-Hz is low — antenna placement"
+	fi
+else
+	fail "gpsd returned no data on the socket"
+fi
+
+# ---------------------------------------------------------------- hardware
+
+head_ "hardware / boot"
+
+# The RTC is the root of the 2026-09-10 failure: no backup cell -> bogus boot
+# time -> chrony steps by years -> gpsd stops feeding SHM.
+if sudo -n true 2>/dev/null; then DMESG="sudo -n dmesg"; else DMESG="dmesg"; fi
+# grep -c, not grep -q: under `pipefail` an early-exiting grep -q kills dmesg with
+# SIGPIPE and the whole pipeline reports failure, so the test never fires.
+RTC_POWERLOSS=$($DMESG 2>/dev/null | grep -c 'rtc.*Power loss detected' || true)
+if [ "${RTC_POWERLOSS:-0}" -gt 0 ]; then
+	warn "RTC lost power (no backup cell) — clock steps at every cold boot, which"
+	printf '        is what silently kills gpsd SHM. Fit a cell to the IO board RTC.\n'
+elif [ "$(cat /sys/class/rtc/rtc0/hctosys 2>/dev/null || echo 0)" = "1" ]; then
+	ok "system clock was set from the RTC at boot"
+else
+	warn "RTC did not set the system clock at boot (run with sudo access for the reason)"
+fi
+
+if systemctl is-active --quiet ser2net 2>/dev/null; then
+	fail "ser2net is active — it contends with gpsd for /dev/ttyAMA0"
+else
+	ok "ser2net inactive (no contention on /dev/ttyAMA0)"
+fi
+
+# PPS arrives at the Ethernet PHY's timestamp input, not as /dev/pps0.
+PHC=$(cat /sys/class/ptp/ptp0/clock_name 2>/dev/null || echo "")
+if [ "$PHC" = "bcm_phy_ptp" ]; then
+	ok "PHC /dev/ptp0 is $PHC (PPS via BCM54210PE external timestamp)"
+else
+	warn "PHC /dev/ptp0 reports '${PHC:-missing}', expected bcm_phy_ptp"
+fi
+
+# ---------------------------------------------------------------- receiver
+
+if [ "$VERBOSE" = "1" ]; then
+	head_ "receiver config (polled)"
+	export UBXOPTS="-P 29.00"
+	timeout 25 ubxtool -g CFG-TMODE,0 2>/dev/null \
+		| grep -iE 'CFG-TMODE-(MODE|POS_TYPE|HEIGHT|LAT|LON)/' | sed 's/^ */  /'
+	timeout 25 ubxtool -g CFG-TP,0 2>/dev/null \
+		| grep -iE 'CFG-TP-(PULSE_DEF|ANT_CABLEDELAY|PERIOD_TP2|LEN_TP2|USE_LOCKED_TP2|TP2_ENA)/' | sed 's/^ */  /'
+fi
+
+# ---------------------------------------------------------------- verdict
+
+head_ "verdict"
+case "$RC" in
+	0) printf '  %sGNSS timing chain healthy%s\n' "$G" "$N" ;;
+	1) printf '  %sdegraded — see WARN above%s\n' "$Y" "$N" ;;
+	2) printf '  %sGNSS timing is down — see FAIL above%s\n' "$R" "$N" ;;
+esac
+echo
+exit "$RC"

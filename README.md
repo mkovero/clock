@@ -162,6 +162,10 @@ LOCK (on when AR-40A reports locked). Onboard pin 13 = heartbeat. Both LEDs ~1.5
 through 1 kΩ — Teensy 4.0 pins default ~4 mA drive, don't push. Measured Vf: yellow
 1.82 V, red 1.794 V.
 
+**Wiring checked and both LEDs operating, 2026-09-10** `[meas]`. An earlier session saw
+them dark with otherwise-healthy status; that was wiring, not firmware, and it is
+resolved. 1.5 mA through 1 kΩ is enough to see.
+
 Wiring: one 2-conductor shielded multicore strand — two conductors carry anodes,
 shield is common cathode return to Teensy ground. Resistors at Teensy end. Shield must
 not also touch chassis; here it is conductor, not shield, and bonding it to enclosure
@@ -502,14 +506,14 @@ Ground paths currently existing between subsystems:
 | AR-40A module case → enclosure chassis | bonded `[built]` |
 | AR-40A SMA output ground → chassis | bonded — **the reference chain's signal ground is the AR-40A chassis** `[built]` |
 | AR-40A PSU ground → chassis | bonded `[built]` |
-| AR-40A chassis → mains PE | **unknown — depends on the supply's inlet** `[?]` |
+| AR-40A chassis → mains PE | **bonded — continuity confirmed 2026-09-10** `[meas]` |
 | Extron chassis → 10 MHz coax shields | Extron has a grounded IEC inlet — **mains earth enters the reference chain here** |
 | AR-40A T → Si5351 board ground | via coax shield |
 | Si5351 board → CM4 | 54 MHz coax shield, grounded both ends |
 | Teensy + Si5351 + CM4 supply | **all three on one MeanWell RS-15-5 (5 V)** — they share a DC ground through the supply wiring `[built]` |
 | AR-40A supply | MeanWell LRS-75-15 (15 V), separate — **−V deliberately not tied to the 5 V supply's −V** `[built]` |
 | F9T → CM4 | shared 5 V return + UART ground; PPS shield bonded at CM4 end only |
-| GNSS antenna coax shield | carries outside potential; termination point unknown `[?]` |
+| GNSS antenna coax shield | antenna reattached 2026-09-10; bonding point still unknown `[?]` |
 | Supply grounds | topology unconfirmed `[?]` |
 
 **Correction to "floating island" framing.** Digital island is *not* floating once
@@ -563,9 +567,14 @@ Consequences and mitigations:
   can't be removed; the DC/mains-frequency loop a bonded connector would add can be.
   Shield to board ground pour only.
 
-**Two possible earth injections.** If AR-40A chassis reaches mains PE, reference chain is
-earthed at both ends — AR-40A and Extron — and 10 MHz coax closes the loop. Test: unplug
-AR-40A supply, DMM continuity from enclosure to earth pin of its mains inlet. `[?]`
+**Two earth injections — CONFIRMED 2026-09-10.** `[meas]` Unplugged continuity from
+AR-40A enclosure to its mains inlet earth pin: continuous. So reference chain is earthed
+at both ends — AR-40A and Extron — and the 10 MHz coax shield closes that loop.
+
+Loop is real, but measured to be harmless: CM4 chassis to Extron chassis reads **<3 mV
+AC** (below), which is the voltage the loop actually develops across the grounds that
+matter. Consistent with the priority judgement below — do not lift either earth, do not
+chase this further until a measurement says otherwise.
 
 **Does not change the pad.** AR-40A output ground is already its chassis ground, so
 isolating connectors on a pad hanging off that output achieves nothing — shield arrives
@@ -590,16 +599,22 @@ timestamping is referenced to. Doesn't break anything; biases and slowly modulat
 threshold crossing — looks like small wandering offset rather than fault.
 
 **Measured 2026-09-09** `[meas]`: F9T ground to CM4 ground <10 mV; Teensy ground to CM4
-ground 0.6 mV. Both bonds benign in steady state. Reading still missing is CM4 to Extron
-chassis, where mains earth would show up.
+ground 0.6 mV. Both bonds benign in steady state.
+
+**Measured 2026-09-10, in the rack** `[meas]`: CM4 ground to Extron chassis **<3 mV AC** —
+the last missing reading, and the one where mains earth from the Extron inlet would have
+shown up. It does not. Both earth injections exist (AR-40A chassis is at PE, above) and
+the loop through the 10 MHz shield is therefore closed, but it develops single-digit
+millivolts, not the tens or hundreds that would put a wandering bias on the PPS
+threshold. Earth-path question is closed for this build.
 
 Also: grounding PPS coax shield at *both* ends stopped F9T dead (§3) — fault the
 millivolt readings do not explain, and reason to treat added bonds between islands as
 changes worth testing rather than tidying.
 
-**Measurements to settle it:** DMM on AC volts between (a) F9T ground and CM4 ground,
-(b) CM4 ground and Extron chassis. More than few mV means loop current worth chasing.
-`[?]`
+~~**Measurements to settle it:** DMM on AC volts between (a) F9T ground and CM4 ground,
+(b) CM4 ground and Extron chassis.~~ Both taken — <10 mV and <3 mV respectively. No loop
+current worth chasing. `[meas]`
 
 **Cable thermal note.** PTFE coax (RG-178, RG-316) has phase-vs-temperature
 discontinuity around 19–21 °C, stepping delay by few hundred ppm over ~2 °C. For a rig
@@ -803,7 +818,13 @@ attached. See sequencing note below for why that ordering changed.
 
 ### Sequencing — what the constraint actually is
 
-Rack move is last moment box and scope are on same table, and after it Orion is available
+**Rack move happened 2026-09-10.** Rig is in the rack on its own supplies. The connector
+build (item 7) did not happen before it, so the DA/Orion loaded measurement (item 8) now
+needs the scope carried to the rack rather than the box carried to the bench. Everything
+else that the move gated is either done or unaffected.
+
+Original reasoning, kept because it still explains the ordering: rack move is last moment
+box and scope are on same table, and after it Orion is available
 as load. Used to imply large "do it before the move" batch. No longer does:
 
 - CLK4/XIN amplitude question deferred until second CM4 exists (§8), so not a bench item
@@ -819,32 +840,64 @@ the rack move.
 
 ### Open — after the rack move, software
 
-1. **Flash and exercise OE-readback firmware.** `setClk4()` now verifies register 3,
-   reports the actual OE byte, leaves state unknown on failed write/readback and counts
-   `oeErr`. Code complete 2026-09-10; hardware verification remains. `[plan]`
-2. **Soak `dataErr`.** After flashing, leave it running an hour or two and read the
-   counter. Zero means 100 kHz bus speed was the whole story and the pull-up question
-   closes; anything above zero means fit external 2.2k–4.7k to 3V3 on SDA/SCL. `[?]`
-3. **Validate GNSS with the antenna reattached.** Confirm a valid UTC fix, restore
-   chrony's commented `refclock SHM 0 ... noselect` source, and verify reach. gpsd itself
-   is already active on `/dev/ttyAMA0`; TMODE, TP2 and cable-delay readbacks are closed
-   in §6b.
+1. ~~**Flash and exercise OE-readback firmware.**~~ Done 2026-09-10. `setClk4()`
+   verifies register 3, reports the actual OE byte, leaves state unknown on failed
+   write/readback and counts `oeErr`. Exercised on hardware: healthy reports read
+   `CLK4=on OE=0xEF oeErr=0` across an AR-40A power-cycle and an unlocked→locked BIT
+   transition.
+2. **`dataErr` soak — inconclusive, errors persist at low rate.** `[meas]` Soaked in the
+   rack on the rig's own supplies with the laptop disconnected — the exact conditions the
+   earlier bench test could not provide. Result: `dataErr` still rises slowly. Not
+   alarming (rejections are safe by construction — CLK4 is held, `i2cErr` and `revidErr`
+   stay zero), but not zero either.
 
-### Open — five minutes with a DMM, whenever the box is reachable
+   So the decision rule from the bench has been overtaken. It read "anything above zero
+   means fit external 2.2k–4.7k to 3V3 on SDA/SCL" — but those are already fitted: 4.9 kΩ
+   on each of SDA and SCL to 3.3 V, ≈3.6 kΩ effective in parallel with the internal
+   pull-up, and the errors survived both that and the move to clean supplies. Neither bus
+   speed nor pull-up strength nor the laptop's ground was the whole story.
 
-6. **Is AR-40A chassis at mains PE?** Unplugged continuity, enclosure to inlet earth pin.
-   Determines whether 10 MHz chain has one earth injection or two (§5). Property of the
-   unit — bench or rack makes no difference. `[?]`
+   **What is still missing is the rate, not the fact.** "Casually rising" is not a
+   number; the next useful datum is errors per hour from a known-zero reset, which turns
+   this from a yes/no into something that can be compared against a change. Next
+   candidate change remains a second 4.9 kΩ in parallel per line (≈2.1 kΩ effective),
+   but measure the current rate first so the comparison means something. `[?]`
+3. ~~**Validate GNSS with the antenna reattached.**~~ **Done 2026-09-10 — rig is
+   stratum 1.** `[meas]` See §9 for the whole diagnosis; summary:
 
-### Open — build the connectors before the move
+   - **Antenna siting is fine.** 3D fix, 12 SVs used, PDOP 1.73, best C/N₀ 43 dB-Hz,
+     reported position agrees with the surveyed TMODE fixed position. It had not been
+     sited deliberately, so this was not a given.
+   - **chrony's refclocks were never miscommented or misconfigured.** Both
+     `refclock PHC /dev/ptp0:extpps ... refid PPS2 lock NMEA prefer` and
+     `refclock SHM 0 ... refid NMEA offset 0.028 noselect` were live and correct, and
+     both read `Reach 0`. The fault was upstream in gpsd.
+   - **After restarting gpsd:** `PPS2` selected, **Stratum 1**, last offset **−11 ns**,
+     estimated error **±19 µs**, `Reach 377` on both refclocks.
+
+   Note the antenna run may have changed length at the move — if so the stored
+   `CFG-TP-ANT_CABLEDELAY=5` ns no longer matches the cable (§6b). Still `[?]`.
+
+### Closed — the DMM session, 2026-09-10
+
+6. ~~**Is AR-40A chassis at mains PE?**~~ **Yes — continuity confirmed** `[meas]`. The
+   10 MHz chain therefore has **two** earth injections, AR-40A and Extron, with the coax
+   shield closing the loop between them (§5).
+9. ~~**AC volts between grounds.**~~ CM4 ↔ Extron chassis reads **<3 mV AC** `[meas]` —
+   the last missing reading. Both earth injections are real and the loop is closed, but
+   it develops single-digit millivolts, so there is no loop current worth chasing and
+   nothing to do about it. Do not lift either earth. Earth-path question closed (§5).
+
+### Open — build the connectors, now at the rack
 
 7. **DIY a 75 Ω terminator, a 50 Ω terminator and a BNC tee** from chassis connectors
-   already on hand. See construction note below. Without known-value terminator of his
+   already on hand. **Skipped before the move due to circumstances**, so it is now the
+   single thing gating item 8, and item 8 needs the scope brought to the rack. See construction note below. Without known-value terminator of his
    own, item 8 result is ambiguous between "DA sags into a real load" and "Orion doesn't
    terminate at 75 Ω" — terminator is what makes that measurement mean anything, so not a
    stopgap for a bought part.
 
-### Open — the rack move, one measurement session with the scope carried over
+### Open — one measurement session at the rack, scope carried to it
 
 8. **DA output into real 75 Ω load, and Orion actual termination — one procedure, three
    readings** at Orion input, same setup, same probe:
@@ -859,13 +912,12 @@ the rack move.
    Measured clean unloaded already (§3), ruling out voltage clipping and slew limiting;
    untested is current drive. **No longer gates the board** — jumper-selectable 75/50 Ω
    input termination covers either outcome (§6).
-9. **AC volts between grounds** — CM4↔Extron chassis is the one still unmeasured.
-   F9T↔CM4 read <10 mV and Teensy↔CM4 0.6 mV on 2026-09-09 (§3). Take readings with
-   10 MHz coax disconnected as well as connected; difference is actual size of earth-path
-   effect. Laptop on battery or unplugged — mains-connected laptop adds its own earth path
-   through USB. Belongs here rather than bench: earth topology that matters is the rack's.
-10. **Antenna:** confirm where coax shield is bonded; if roof-mounted, gas-discharge
-    arrestor at entry point. GNSS DC block / galvanic isolator removes whole class of
+9. ~~**AC volts between grounds.**~~ Closed 2026-09-10, see above — <3 mV CM4↔Extron.
+   The refinement never taken, and no longer worth taking on this result: readings with
+   the 10 MHz coax disconnected as well as connected, whose difference would size the
+   earth-path effect. At 3 mV there is nothing to size.
+10. **Antenna — now attached, inspection still outstanding.** Confirm where coax shield
+    is bonded; if roof-mounted, gas-discharge arrestor at entry point. GNSS DC block / galvanic isolator removes whole class of
     ground problem, provided it passes active antenna bias. Also settles whether antenna
     run — and therefore stored CFG-TP5 delay — changes at the move (§6b).
 
@@ -943,3 +995,144 @@ Kept here so they aren't "fixed" without thought.
   current through a protection diode is not what it is for, and threshold crossing is set
   by a diode forward characteristic, which drifts with temperature rather than sitting at
   fixed bias. This is the measured justification for the §6 input stage.
+
+---
+
+## 9. The dead RTC → gpsd → chrony failure chain — diagnosed 2026-09-10
+
+Worth a section of its own because nothing in it is visible from the timing side. The
+symptom is "chrony is stratum 3 off the network and both GNSS refclocks read `Reach 0`",
+and every obvious suspect — antenna, receiver config, chrony config, file permissions —
+was innocent.
+
+### The chain
+
+1. **The CM4 IO Board's RTC has no working backup cell.** `[meas]` `dmesg`:
+
+   ```
+   rtc rtc0: Power loss detected, invalid time
+   rtc-pcf85063 10-0051: registered as rtc0
+   rtc-pcf85063 10-0051: hctosys: unable to read the hardware clock
+   ```
+
+   It is a real **PCF85063** at I²C `10-0051`, not a pseudo-RTC — the one on the IO
+   board, whose battery connector is unpopulated or flat. `/sys/class/rtc/rtc0/hctosys`
+   is `0`, i.e. the system clock was *not* set from it.
+
+2. **`fixrtc` on the kernel command line then guesses the time from the filesystem.**
+   With no RTC to read, boot came up believing it was **2024-08-08 17:51** — the root
+   filesystem's timestamp, roughly two years stale. `who -b` still reports that bogus
+   boot time; `uptime -s` reports the corrected one.
+
+3. **gpsd starts at that bogus time.** `gpsd.service` is `After=chronyd.service`, so it
+   comes up early, long before the clock is fixed.
+
+4. **chrony steps the clock by 65,939,623 s** (~763 days) once the MIKES servers
+   answer — 13 minutes into uptime, not immediately, because the network came up late:
+
+   ```
+   Aug 08 18:03:49 aika chronyd[642]: System clock wrong by 65939623.024447 seconds
+   Sep 10 22:37:32 aika chronyd[642]: System clock was stepped by 65939623.024447 seconds
+   ```
+
+5. **gpsd never ships another SHM sample.** It survives the step as a process but stops
+   writing NTP0. Verified from both ends: `ntpshmmon` run as root saw **zero** samples in
+   10 s, while `/proc/<pid>/maps` showed gpsd *and* chronyd both still attached to
+   `SYSV4e545030`. So the plumbing was intact and simply carried nothing.
+
+6. **`lock NMEA` propagates the starvation to the PPS.** `PPS2` is the PHC refclock and
+   is locked to `NMEA` for second-numbering. NMEA delivering nothing means PPS2 cannot
+   number its pulses, so *both* refclocks read `Reach 0` and chrony falls back to the
+   network at stratum 3. One dead coin cell, two dead refclocks.
+
+### Proof it is gpsd and not the config
+
+Stopping the service and running gpsd in the foreground with the *identical* options
+produced samples immediately, once per second:
+
+```
+gpsd:PROG: NTP:SHM: ntpshm_put(NTP0, -1) /dev/ttyAMA0,  1789070511.000000000 @  1789070511.242462334
+gpsd:PROG: UBX: cycle end x0121 iTOW 417730000
+```
+
+Restarting the service was the whole fix. Within 40 s:
+
+```
+#* PPS2       0   4   377    10    -11ns[  -14ns] +/-   19us
+#? NMEA       0   4   377     9   +215ms[ +215ms] +/-  534us
+Reference ID : 50505332 (PPS2)   Stratum : 1
+```
+
+**A restart of gpsd is therefore the recovery action** any time the GNSS refclocks are
+unreachable after a cold boot. It is not a fix.
+
+### What actually fixes it
+
+1. **Fit a backup cell to the IO board's RTC connector.** `[plan]` This removes the
+   entire chain at step 1 — the clock comes up within seconds of correct, chrony never
+   steps by years, and gpsd never sees the discontinuity. `rtcsync` is already in
+   `chrony.conf`, so the RTC is being written every 11 minutes and will be right the
+   moment it can hold charge. Cheapest possible fix for the most obscure failure here.
+2. **Install `fake-hwclock`** (currently **not installed**, no `/etc/fake-hwclock.data`).
+   `[plan]` Belt and braces: boot comes up at last-shutdown time rather than at the
+   filesystem's date, so even a flat cell leaves a step of hours rather than years.
+3. **Order gpsd after the clock is sane, or restart it once it is.** `[plan]`
+   `chrony-wait.service` exists and is **disabled**. Enabling it and ordering gpsd
+   `After=time-sync.target` is the tidy form, but it has a real failure mode: with the
+   network down at boot, chrony has no NTP source, `chrony-wait` blocks, and gpsd — the
+   only remaining time source — never starts. Prefer a small oneshot that runs
+   `systemctl try-restart gpsd` after `time-sync.target`, which leaves gpsd running early
+   and merely re-arms SHM after any step.
+
+### Two smaller things this turned up
+
+- **NMEA `offset` is wrong by ~0.2 s.** With `offset 0.028` the NMEA source still reads
+  **+201 to +215 ms**, and gpsd's own SHM pair shows the cycle-ender landing ~252 ms
+  after the second at 38400 baud. Harmless today: NMEA is `noselect` and exists only to
+  number PPS pulses, which needs ±0.5 s, not ±0.5 ms. But it spends half the ambiguity
+  budget for no reason. Correct the constant to ≈0.24 — **determine the sign
+  empirically**, chrony's displayed-sample convention is easy to get backwards, and it
+  costs a chronyd restart, so do it deliberately rather than while the rig is holding
+  lock. `[?]`
+- **38400 baud is the latency.** `[meas]` gpsd auto-detected it; nothing pins it in
+  `/etc/default/gpsd` (`DEVICES="/dev/ttyAMA0"` only) and it matches the F9T's UART1.
+  UART1 carries `UBX-NAV-PVT`, `UBX-NAV-SAT`, `UBX-NAV-TIMEGPS` and NMEA (gpsd tags ZDA
+  as the cycle ender), plus RTCM3 that the receiver emits because TMODE is fixed. That is
+  what makes the cycle land 252 ms late. 115200 would cut it to ~85 ms and widen the
+  second-numbering margin. Not urgent, and it touches receiver config — the PPS path is
+  unaffected either way, since PPS never goes through the UART.
+
+### Note on the PPS path
+
+PPS does **not** reach chrony as `/dev/pps0` — there is no such device, and gpsd logs
+`ntpshm_link_activate() unable to read /dev/pps0` on every start, harmlessly. TIME2 goes
+to the BCM54210PE PHY's external-timestamp input (§3, §6b), and chrony reads it as
+`refclock PHC /dev/ptp0:extpps`, `bcm_phy_ptp`, `n_external_timestamps=1`. That is why the
+non-standard kernel in the eMMC image is irreplaceable and why it was imaged (§7).
+
+### Monitoring — `tools/gpsstat`
+
+`tools/gpsstat` (installed on the CM4 at `~/bin/gpsstat`) walks the whole chain in the
+order it breaks and prints one screen: chrony tracking and *per-refclock reach*, whether
+gpsd is actually writing SHM(0), fix mode / satellites used / DOP / C/N₀ of the
+satellites in the solution, and the hardware facts underneath — RTC power-loss, ser2net
+contention, and that `/dev/ptp0` really is `bcm_phy_ptp`. Exit code 0 healthy, 1
+degraded, 2 GNSS timing down, so it works from cron or a monitor as well as by hand.
+`gpsstat -v` additionally polls TMODE and TP2 back from the receiver; `watch -n5 gpsstat`
+gives a live view.
+
+It exists because the failure above is invisible from the obvious command. `chronyc
+tracking` during the outage showed a healthy, well-disciplined stratum-3 clock — correct
+to a few hundred µs and steering nicely. Nothing was wrong except that the GNSS was
+contributing nothing to it. The one number that gave it away was `Reach 0` on the two
+refclocks, which `tracking` does not show at all.
+
+Current state on this rig: everything OK except the standing RTC warning.
+
+### Housekeeping seen in passing
+
+- `ser2net` confirmed `inactive` after the move — the stale TCP-2000 listener that would
+  have contended with gpsd for `/dev/ttyAMA0` is gone and stayed gone.
+- An `ntpsec` leftover still runs an `ntploggps` cron entry. It is guarded by
+  `[ ! -d /run/systemd/system ]` so it never fires on this systemd host, but it is dead
+  weight and a second time daemon's packaging sitting next to chrony. `[?]`
