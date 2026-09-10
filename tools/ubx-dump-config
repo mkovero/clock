@@ -7,7 +7,7 @@
 #
 # Output is `ubxtool -g` text, which is directly reversible: every line carries
 # the key name and value, so a restore is a matter of feeding the non-default
-# ones back with `ubxtool -z <key>,<val>`.
+# ones back with `ubxtool -z <key "$F9T_TARGET" >,<val>`.
 #
 #   ubx-dump-config <outdir>
 #
@@ -23,6 +23,13 @@ TMPP=$(mktemp) || exit 1
 trap 'rm -f "$TMPG" "$TMPP"' EXIT
 
 export UBXOPTS="${UBXOPTS:--P 29.00}"
+# gpsd now has two devices attached (the receiver and the NTRIP relay), so every
+# ubxtool call must name which one it means, or gpsd answers:
+#   {"class":"ERROR","message":"No path specified in DEVICE, but multiple devices
+#    are attached."}
+# and every readback silently returns nothing.
+F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
+
 
 CFG_GROUPS="CFG-ANA CFG-BATCH CFG-GEOFENCE CFG-HW CFG-I2C CFG-I2CINPROT CFG-I2COUTPROT
 CFG-INFMSG CFG-ITFM CFG-LOGFILTER CFG-MOT CFG-MSGOUT CFG-NAVHPG CFG-NAVSPG CFG-NMEA
@@ -40,7 +47,7 @@ dump_layer() {
 		echo "# host: $(hostname)   date: $(date -Is)"
 		echo "# device: $(gpspipe -w -n 3 2>/dev/null | jq -r 'select(.class=="DEVICES") | .devices[0] | "\(.driver) \(.subtype) \(.subtype1)"' | head -1)"
 		echo "#"
-		echo "# Restore one key with:  ubxtool -z <key>,<value>[,<layer>]"
+		echo "# Restore one key with:  ubxtool -z <key "$F9T_TARGET" >,<value>[,<layer>]"
 		echo
 	} >"$f"
 
@@ -51,7 +58,7 @@ dump_layer() {
 		local pos=0 got total=0
 		: >"$TMPG"
 		while :; do
-			timeout 20 ubxtool -g "$g,$layer,$pos" 2>/dev/null \
+			timeout 20 ubxtool -g "$g,$layer,$pos" "$F9T_TARGET" 2>/dev/null \
 				| grep -oE 'item CFG-[A-Z0-9_]+-[A-Z0-9_]+/0x[0-9a-f]+ val [-0-9]+' \
 				| sed 's/^item //' >"$TMPP"
 			got=$(wc -l <"$TMPP")

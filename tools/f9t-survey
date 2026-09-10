@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# f9t-survey — determine the antenna position, then freeze it back into TMODE.
+#
+#   f9t-survey start <hours>   leave TMODE, log DGNSS-corrected positions + RAWX
+#   f9t-survey status          how far along, and the running mean
+#   f9t-survey finish          write the mean into CFG-TMODE and restore fixed mode
+#   f9t-survey abort           restore fixed mode, keep the log, change nothing else
+#
+# Why this exists: in TMODE fixed the receiver treats the configured position as
+# truth, so position error becomes a *constant* time bias of roughly 3.3 ns per
+# metre. It never averages out, unlike jitter. The stored position on this rig
+# looks entered rather than measured (identical LAT_HP/LON_HP, a round 19.00 m
+# height), and the antenna has since been moved, so it is certainly wrong now.
+#
+# The survey runs the receiver as a rover with Maanmittauslaitos FinnPos DGNSS
+# corrections and averages. That service is code-differential, about 0.5 m at
+# best, so expect ~1-2 ns of residual bias — a large improvement on a position
+# that may be metres out, but not the last word.
+#
+# UBX-RXM-RAWX is logged alongside at no extra cost. That is the input to a PPP
+# solution (RINEX -> NRCan CSRS-PPP or similar), which reaches centimetres and
+# therefore ~0.1 ns. Run the survey now, keep the option of PPP later.
+#
+# TMODE is changed in the RAM layer only, so a power cycle during the survey
+# restores fixed mode with the old coordinates rather than leaving the rig as a
+# rover. `finish` is what writes to Flash.
+
+set -uo pipefail
+
+STATE="${F9T_SURVEY_DIR:-$HOME/f9t-survey}"
+LOG="$STATE/positions.jsonl"
+RAWX="$STATE/rawx.ubx"
+META="$STATE/survey.meta"
+
+export UBXOPTS="${UBXOPTS:--P 29.00}"
+# gpsd now has two devices attached (the receiver and the NTRIP relay), so every
+# ubxtool call must name which one it means, or gpsd answers:
+#   {"class":"ERROR","message":"No path specified in DEVICE, but multiple devices
+#    are attached."}
+# and every readback silently returns nothing.
+F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
+
+
+die() { echo "error: $*" >&2; exit 1; }
+
+getkey() {
+	timeout 20 ubxtool -g "$1,0" "$F9T_TARGET" 2>/dev/null \
+		| grep -oE "item $1/0x[0-9a-f]+ val [-0-9]+" \
+		| grep -oE 'val [-0-9]+' | awk '{print $2}' | head -1
+}
+
+setkey() {
+	timeout 20 ubxtool -z "$1,$2,${3:-1}" "$F9T_TARGET" >/dev/null 2>&1
+	sleep 1
+	local got; got=$(getkey "$1")
+	[ "$got" = "$2" ] || { echo "  WARN $1 wanted $2, reads ${got:-?}" >&2; return 1; }
+	return 0
+}
+
+cmd_start() {
+	local hours="${1:-6}"
+	mkdir -p "$STATE" || die "cannot create $STATE"
+	[ -f "$META" ] && die "survey already running; use status, finish or abort"
+
+	echo "Recording the position TMODE is currently asserting, so it can be restored:"
+	{
+		echo "started=$(date -Is)"
+		echo "hours=$hours"
+		for k in CFG-TMODE-MODE CFG-TMODE-POS_TYPE CFG-TMODE-LAT CFG-TMODE-LAT_HP \
+		         CFG-TMODE-LON CFG-TMODE-LON_HP CFG-TMODE-HEIGHT CFG-TMODE-HEIGHT_HP \
+		         CFG-TMODE-FIXED_POS_ACC; do
+			# Shell variable names cannot contain hyphens, and this file is
+			# sourced by status/finish/abort, so flatten the key name.
+			printf 'old_%s=%s\n' "$(echo "$k" | tr - _)" "$(getkey $k)"
+		done
+	} >"$META"
+	sed 's/^/  /' "$META"
+
+	echo
+	echo "Leaving TMODE (RAM layer only — a power cycle restores fixed mode):"
+	setkey CFG-TMODE-MODE 0 1 && echo "  TMODE disabled, receiver is now a rover"
+
+	# RAWX is the PPP input. NAV-PVT already runs at 1 Hz and carries the position.
+	echo "Enabling UBX-RXM-RAWX on UART1 for a later PPP solution:"
+	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 1 1 && echo "  RAWX on"
+
+	# Two loggers. The JSON one feeds the averaging; the raw one captures the whole
+	# UBX stream including RXM-RAWX, which is the input to a later PPP solution.
+	echo
+	echo "Starting loggers:"
+	nohup sh -c "gpspipe -w >>'$LOG'" >/dev/null 2>&1 &
+	echo "json_pid=$!" >>"$META"
+	nohup sh -c "gpspipe -R >>'$RAWX'" >/dev/null 2>&1 &
+	echo "rawx_pid=$!" >>"$META"
+	sleep 3
+	printf '  position log %s (%s lines)\n' "$LOG" "$(wc -l <"$LOG" 2>/dev/null || echo 0)"
+	printf '  raw log      %s (%s)\n' "$RAWX" "$(du -h "$RAWX" 2>/dev/null | cut -f1)"
+
+	echo
+	echo "Survey running for $hours h."
+	echo "Check with: f9t-survey status"
+}
+
+cmd_status() {
+	[ -f "$META" ] || die "no survey in progress"
+	# shellcheck disable=SC1090
+	. "$META"
+
+	local n started_s now_s elapsed
+	n=$(wc -l <"$LOG" 2>/dev/null || echo 0)
+	started_s=$(date -d "$started" +%s)
+	now_s=$(date +%s)
+	elapsed=$(( (now_s - started_s) / 60 ))
+
+	printf 'started   %s\n' "$started"
+	printf 'elapsed   %d min of %s h\n' "$elapsed" "$hours"
+	printf 'fixes     %s\n' "$n"
+	[ -f "$RAWX" ] && printf 'rawx      %s\n' "$(du -h "$RAWX" | cut -f1)"
+
+	[ "${n:-0}" -lt 2 ] && { echo "not enough data yet"; return 0; }
+
+	python3 - "$LOG" <<'PY'
+import json, sys, math
+lat=[]; lon=[]; alt=[]; modes={}
+for line in open(sys.argv[1]):
+    try: d=json.loads(line)
+    except Exception: continue
+    if d.get("class")!="TPV": continue
+    modes[d.get("status",0)]=modes.get(d.get("status",0),0)+1
+    if d.get("mode")!=3: continue
+    if None in (d.get("lat"), d.get("lon")): continue
+    lat.append(d["lat"]); lon.append(d["lon"]); alt.append(d.get("altHAE", d.get("alt",0)))
+if not lat:
+    print("no 3D fixes yet"); raise SystemExit
+def stat(v):
+    m=sum(v)/len(v)
+    sd=math.sqrt(sum((x-m)**2 for x in v)/len(v)) if len(v)>1 else 0.0
+    return m, sd
+mlat,slat=stat(lat); mlon,slon=stat(lon); malt,salt=stat(alt)
+# metres per degree at this latitude
+mlat_m = 111132.0
+mlon_m = 111320.0*math.cos(math.radians(mlat))
+print(f"\nmean lat  {mlat:.9f}  sd {slat*mlat_m:6.2f} m")
+print(f"mean lon  {mlon:.9f}  sd {slon*mlon_m:6.2f} m")
+print(f"mean hae  {malt:.3f} m      sd {salt:6.2f} m")
+# gpsd status: 2 = DGPS corrections applied
+dg=modes.get(2,0); tot=sum(modes.values())
+print(f"\ndifferential fixes: {dg}/{tot}  ({100*dg/tot:.0f}%)" if tot else "")
+se = (slat*mlat_m)/math.sqrt(len(lat))
+print(f"standard error of the mean, horizontal: {se:.3f} m  -> {se*3.3:.2f} ns of time bias")
+PY
+}
+
+cmd_finish() {
+	[ -f "$META" ] || die "no survey in progress"
+	# shellcheck disable=SC1090
+	. "$META"
+
+	local out
+	out=$(python3 - "$LOG" <<'PY'
+import json, sys, math
+lat=[]; lon=[]; alt=[]
+for line in open(sys.argv[1]):
+    try: d=json.loads(line)
+    except Exception: continue
+    if d.get("class")!="TPV" or d.get("mode")!=3: continue
+    if None in (d.get("lat"), d.get("lon")): continue
+    lat.append(d["lat"]); lon.append(d["lon"]); alt.append(d.get("altHAE", d.get("alt",0)))
+if len(lat) < 60:
+    print("TOOFEW"); raise SystemExit
+mlat=sum(lat)/len(lat); mlon=sum(lon)/len(lon); malt=sum(alt)/len(alt)
+sd=math.sqrt(sum((x-mlat)**2 for x in lat)/len(lat))*111132.0
+se=sd/math.sqrt(len(lat))
+# CFG-TMODE LAT/LON are 1e-7 deg with a separate _HP field in 1e-9 deg (-99..99).
+def split(d):
+    scaled = round(d*1e9)
+    base = scaled // 100
+    hp = scaled - base*100
+    while hp > 99: base += 1; hp -= 100
+    while hp < -99: base -= 1; hp += 100
+    return base, hp
+la,lahp = split(mlat); lo,lohp = split(mlon)
+# HEIGHT is cm, HEIGHT_HP is 0.1 mm (-99..99)
+hcm = round(malt*100); hhp = round((malt*100 - hcm)*1000)
+acc = max(1, round(se*10000))   # FIXED_POS_ACC is 0.1 mm units
+print(f"{la} {lahp} {lo} {lohp} {hcm} {hhp} {acc} {len(lat)} {mlat:.9f} {mlon:.9f} {malt:.3f} {se:.3f}")
+PY
+)
+	[ "$out" = "TOOFEW" ] && die "fewer than 60 usable fixes; let it run longer"
+	read -r LA LAHP LO LOHP HCM HHP ACC N MLAT MLON MALT SE <<<"$out"
+
+	echo "Survey result from $N fixes:"
+	printf '  lat %s  lon %s  height %s m (HAE)\n' "$MLAT" "$MLON" "$MALT"
+	printf '  standard error %s m  ->  %.2f ns of time bias\n' "$SE" "$(echo "$SE 3.3" | awk '{print $1*$2}')"
+	echo
+	echo "Writing to CFG-TMODE (Flash):"
+	setkey CFG-TMODE-LAT "$LA" 7
+	setkey CFG-TMODE-LAT_HP "$LAHP" 7
+	setkey CFG-TMODE-LON "$LO" 7
+	setkey CFG-TMODE-LON_HP "$LOHP" 7
+	setkey CFG-TMODE-HEIGHT "$HCM" 7
+	setkey CFG-TMODE-HEIGHT_HP "$HHP" 7
+	setkey CFG-TMODE-FIXED_POS_ACC "$ACC" 7
+	# Clear the stale ECEF values so POS_TYPE=0 can never select a bogus position.
+	setkey CFG-TMODE-ECEF_X 0 7; setkey CFG-TMODE-ECEF_X_HP 0 7
+	setkey CFG-TMODE-ECEF_Y 0 7; setkey CFG-TMODE-ECEF_Y_HP 0 7
+	setkey CFG-TMODE-ECEF_Z 0 7; setkey CFG-TMODE-ECEF_Z_HP 0 7
+	setkey CFG-TMODE-POS_TYPE 1 7
+	setkey CFG-TMODE-MODE 2 7 && echo "  fixed mode restored with the surveyed position"
+
+	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 0 7 >/dev/null 2>&1
+	kill "${json_pid:-0}" "${rawx_pid:-0}" 2>/dev/null
+
+	{
+		echo "finished=$(date -Is)"
+		echo "fixes=$N"
+		echo "new_lat=$MLAT"
+		echo "new_lon=$MLON"
+		echo "new_hae=$MALT"
+		echo "stderr_m=$SE"
+	} >>"$META"
+	echo
+	echo "Result recorded in $META — copy it into the repo."
+}
+
+cmd_abort() {
+	[ -f "$META" ] || die "no survey in progress"
+	# shellcheck disable=SC1090
+	. "$META"
+	echo "Restoring the previous fixed position:"
+	setkey CFG-TMODE-LAT "$old_CFG_TMODE_LAT" 1 2>/dev/null
+	setkey CFG-TMODE-MODE "${old_CFG_TMODE_MODE:-2}" 1
+	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 0 1
+	kill "${json_pid:-0}" "${rawx_pid:-0}" 2>/dev/null
+	mv "$META" "$META.aborted-$(date +%s)"
+	echo "aborted; log kept at $LOG"
+}
+
+case "${1:-}" in
+	start)  shift; cmd_start "$@" ;;
+	status) cmd_status ;;
+	finish) cmd_finish ;;
+	abort)  cmd_abort ;;
+	*) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

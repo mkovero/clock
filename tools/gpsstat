@@ -32,6 +32,11 @@ head_() { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
 VERBOSE=0
 [ "${1:-}" = "-v" ] && VERBOSE=1
 
+# gpsd may have more than one device attached (the receiver plus an NTRIP relay
+# feeding it corrections). ubxtool must be told which one, or gpsd refuses with
+# "No path specified in DEVICE, but multiple devices are attached."
+F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
+
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
@@ -172,7 +177,7 @@ head_ "accuracy"
 # Receiver's own estimate, from UBX-NAV-TIMEGPS. Read-only: -w just decodes the
 # 1 Hz stream, it does not poll the receiver. NAV-PVT also carries a tAcc and it
 # is a different, looser number, so anchor the grep to the TIMEGPS block.
-TACC=$(export UBXOPTS="-P 29.00"; timeout 6 ubxtool -w 4 2>/dev/null \
+TACC=$(export UBXOPTS="-P 29.00"; timeout 6 ubxtool -w 4 "$F9T_TARGET" 2>/dev/null \
 	| grep -A1 'UBX-NAV-TIMEGPS' | grep -oE 'tAcc [0-9]+' | tail -1 | awk '{print $2}')
 if [ -n "${TACC:-}" ]; then
 	printf '  receiver time accuracy (NAV-TIMEGPS tAcc) : %s ns\n' "$TACC"
@@ -238,14 +243,14 @@ fi
 if [ "$VERBOSE" = "1" ]; then
 	head_ "receiver config (polled)"
 	export UBXOPTS="-P 29.00"
-	timeout 25 ubxtool -g CFG-TMODE,0 2>/dev/null \
+	timeout 25 ubxtool -g CFG-TMODE,0 "$F9T_TARGET" 2>/dev/null \
 		| grep -iE 'CFG-TMODE-(MODE|POS_TYPE|HEIGHT|LAT|LON)/' | sed 's/^ */  /'
-	timeout 25 ubxtool -g CFG-TP,0 2>/dev/null \
+	timeout 25 ubxtool -g CFG-TP,0 "$F9T_TARGET" 2>/dev/null \
 		| grep -iE 'CFG-TP-(PULSE_DEF|ANT_CABLEDELAY|PERIOD_TP2|LEN_TP2|USE_LOCKED_TP2|TP2_ENA)/' | sed 's/^ */  /'
 	# Per-signal enables, not the per-constellation master switches: a constellation
 	# whose master switch is on but whose every signal is off contributes nothing.
 	printf '  signals enabled:'
-	timeout 25 ubxtool -g CFG-SIGNAL,0 2>/dev/null \
+	timeout 25 ubxtool -g CFG-SIGNAL,0 "$F9T_TARGET" 2>/dev/null \
 		| awk '/CFG-SIGNAL-.*_ENA\/.* val 1/ {
 			match($0, /CFG-SIGNAL-[A-Z0-9_]+_ENA/);
 			n = substr($0, RSTART+11, RLENGTH-15);

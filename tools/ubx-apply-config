@@ -26,6 +26,13 @@ if [ -z "$FILE" ] || [ ! -r "$FILE" ]; then
 fi
 
 export UBXOPTS="${UBXOPTS:--P 29.00}"
+# gpsd now has two devices attached (the receiver and the NTRIP relay), so every
+# ubxtool call must name which one it means, or gpsd answers:
+#   {"class":"ERROR","message":"No path specified in DEVICE, but multiple devices
+#    are attached."}
+# and every readback silently returns nothing.
+F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
+
 
 case "$LAYER" in
 	1) LNAME="RAM only (reverts on power cycle)" ;;
@@ -37,7 +44,7 @@ echo "Applying $FILE -> $LNAME"
 echo
 
 read_key() {
-	timeout 20 ubxtool -g "$1,0" 2>/dev/null \
+	timeout 20 ubxtool -g "$1,0" "$F9T_TARGET" 2>/dev/null \
 		| grep -oE "item $1/0x[0-9a-f]+ val [-0-9]+" \
 		| grep -oE 'val [-0-9]+' | awk '{print $2}' | head -1
 }
@@ -59,7 +66,7 @@ while read -r key val _rest; do
 		continue
 	fi
 
-	timeout 20 ubxtool -z "$key,$val,$LAYER" >/dev/null 2>&1
+	timeout 20 ubxtool -z "$key,$val,$LAYER" "$F9T_TARGET" >/dev/null 2>&1
 	sleep 1
 	after=$(read_key "$key")
 
