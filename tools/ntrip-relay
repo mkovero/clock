@@ -85,6 +85,7 @@ class Relay:
         self.lock = threading.Lock()
         self.bytes_in = 0
         self.last_data = 0.0
+        self.serial_fd = None
 
     # ---------------------------------------------------------------- caster
 
@@ -204,7 +205,44 @@ class Relay:
             threading.Thread(target=self.handle_client,
                              args=(c, addr), daemon=True).start()
 
+    # ------------------------------------------------------------- serial sink
+    #
+    # gpsd will relay RTCM, but it drops 1006 and 1008 — the reference station
+    # ARP and antenna descriptor — while passing every other message through.
+    # Without the base coordinates the receiver cannot form a differential
+    # solution, so UBX-NAV-PVT keeps reporting flags=0x1 (diffSoln clear) even
+    # though UBX-RXM-RTCM shows the observation messages arriving with good CRC.
+    #
+    # Writing straight to the receiver's port sidesteps that. It does not fight
+    # gpsd: gpsd runs with --passive, so it never writes to the port itself, and
+    # a second writer on a tty someone else is reading is harmless.
+
+    def open_serial(self):
+        if not self.a.serial:
+            return
+        try:
+            self.serial_fd = os.open(self.a.serial, os.O_WRONLY | os.O_NOCTTY)
+            log(f"writing RTCM directly to {self.a.serial}")
+        except OSError as e:
+            log(f"cannot open {self.a.serial}: {e}")
+            self.serial_fd = None
+
+    def to_serial(self, data):
+        if self.serial_fd is None:
+            return
+        try:
+            os.write(self.serial_fd, data)
+        except OSError as e:
+            log(f"serial write failed: {e}; reopening")
+            try:
+                os.close(self.serial_fd)
+            except OSError:
+                pass
+            self.serial_fd = None
+            self.open_serial()
+
     def fanout(self, data):
+        self.to_serial(data)
         with self.lock:
             dead = []
             for c in self.clients:
@@ -223,6 +261,7 @@ class Relay:
     # ------------------------------------------------------------------ main
 
     def run(self):
+        self.open_serial()
         threading.Thread(target=self.serve, daemon=True).start()
 
         backoff = 2
@@ -287,6 +326,9 @@ def main():
     p.add_argument("--lon", type=float, required=True)
     p.add_argument("--alt", type=float, default=0.0)
     p.add_argument("--gga-interval", type=float, default=10.0)
+    p.add_argument("--serial", default=None,
+                   help="also write RTCM straight to this device, "
+                        "bypassing gpsd's relay (which drops 1006/1008)")
     a = p.parse_args()
 
     path = os.path.expanduser(a.password_file)
