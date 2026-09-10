@@ -51,10 +51,11 @@
 //   reg 0 bit 4  LOS_CLKIN   no signal on CLKIN
 //   reg 0 bit 5  LOL_A       PLLA not locked
 //
-// THREE states, not two. An I2C read failure is NOT a reference failure and
-// must not change the output state:
+// FOUR states, not two. Neither an I2C failure nor a corrupted reading is a
+// reference failure, and neither may change the output state:
 //
 //   comm failed        -> hold whatever CLK4 was doing, count the error
+//   reading rejected   -> hold, count separately (see below)
 //   reference bad      -> disable after BAD_READS_TO_DISABLE consecutive polls
 //   reference good     -> enable after GOOD_READS_TO_ENABLE consecutive polls
 //
@@ -64,6 +65,41 @@
 // was the sticky register: reg 1 read 0xC0 throughout, i.e. LOL_A_STKY and
 // LOS_CLKIN_STKY never latched, proving the reference had not actually
 // dropped.
+//
+// -----------------------------------------------------------------------------
+// I2C DATA INTEGRITY
+//
+// A transaction can succeed while the data it carried is wrong. One poll
+// returned reg0 = 0xC1 with SYS_INIT apparently set, every other flag
+// unchanged and the sticky byte unchanged - a bit error in transit, not an
+// event. Wire.endTransmission() returned 0, so i2cErr did not count it and the
+// true error rate was higher than the counter showed. Only the two-read
+// debounce stopped it reaching the output.
+//
+// The sticky register makes such a reading detectable in software. A live
+// fault bit in reg 0 cannot be set while its sticky counterpart in reg 1 reads
+// clear: the sticky latches when the condition asserts, this sketch clears it
+// at the end of every poll, and a condition that is still true re-latches it
+// immediately. So
+//
+//   reg0 fault set  AND  matching reg1 sticky clear   ->  impossible
+//
+// and any sample showing that is discarded rather than acted on. Discarded
+// samples do NOT clear the sticky byte, so the evidence accumulates for the
+// next comparison. They are counted in dataErr, reported alongside i2cErr.
+//
+// Fail-safe: the check rests on the assumption that a persistent condition
+// keeps its sticky bit set. If that assumption is ever wrong on this part, a
+// genuine reference loss would be rejected forever and CLK4 would be left
+// running at the free-VCO frequency - exactly the failure this sketch exists
+// to prevent. So after CONTRADICTIONS_TO_TRUST consecutive rejections the
+// check stands down, the reading is believed, and the bypass is logged.
+//
+// Bus hardening on the hardware side: the poll rate is 4 Hz, so bus speed is
+// irrelevant and SCL runs at 100 kHz rather than 400 kHz. The Teensy 4.0's
+// internal pull-ups are weak; if these errors persist, fit external 2.2k-4.7k
+// to 3V3 on SDA and SCL and keep the wires short.
+// -----------------------------------------------------------------------------
 //
 // The AR-40A's BIT (lock) pin arrives on LOCK_BIT_PIN and is used for
 // INDICATION ONLY, not for gating. Gating on BIT would reinstate the old
@@ -120,6 +156,26 @@ static const uint8_t  STATUS_LED_PIN       = 13;   // Teensy onboard, heartbeat
 static const uint32_t POLL_INTERVAL_MS     = 250;
 static const uint8_t  GOOD_READS_TO_ENABLE = 4;    // ~1 s of clean status
 static const uint8_t  BAD_READS_TO_DISABLE = 2;    // ignore single-poll blips
+
+// Reg 0 / reg 1 bits cross-checked against each other. Only bits whose sticky
+// counterpart carries information:
+//   bit 5  LOL_A
+//   bit 4  LOS_CLKIN
+//
+// Excluded, because their stickies are permanently asserted on this board and
+// so can never contradict anything:
+//   bit 7  SYS_INIT  - observed: sticky reads 0xC0 every poll, i.e. bit 7
+//                      re-latches immediately after every clear
+//   bit 6  LOL_B     - PLLB unconfigured, permanently unlocked
+//   bit 3  LOS_XTAL  - no crystal fitted
+//
+// This was found the hard way: a glitched reg0 = 0xC1 sailed through the
+// cross-check with dataErr = 0, because SYS_INIT_STKY was already set.
+static const uint8_t  FAULT_MASK           = 0x30;
+
+// Consecutive rejected samples after which the cross-check stands down and the
+// reading is believed. ~2 s at the default poll interval. See the header note.
+static const uint8_t  CONTRADICTIONS_TO_TRUST = 8;
 
 // Set false to make a genuine loss of CLKIN report only, leaving CLK4 running
 // at whatever the free-running VCO produces. Default true: a stopped CM4 is
@@ -182,6 +238,33 @@ static bool siReadOk(uint8_t reg, uint8_t &val) {
 static uint8_t siRead(uint8_t reg) {
   uint8_t v;
   return siReadOk(reg, v) ? v : 0xFF;
+}
+
+// Write a register and read it straight back. Returns false and logs on any
+// mismatch or failed read. Used at init on the registers whose contents there
+// is any reason to argue about later.
+static bool siWriteVerify(uint8_t reg, uint8_t val, const char *what) {
+  if (!siWrite(reg, val)) {
+    Log.print("reg "); Log.print(reg);
+    Log.print(" ("); Log.print(what); Log.println("): write failed");
+    return false;
+  }
+  uint8_t rb;
+  if (!siReadOk(reg, rb)) {
+    Log.print("reg "); Log.print(reg);
+    Log.print(" ("); Log.print(what); Log.println("): readback failed");
+    return false;
+  }
+  if (rb != val) {
+    Log.print("reg "); Log.print(reg);
+    Log.print(" ("); Log.print(what); Log.print("): wrote 0x");
+    Log.print(val, HEX); Log.print(" read 0x"); Log.println(rb, HEX);
+    return false;
+  }
+  Log.print("reg "); Log.print(reg);
+  Log.print(" ("); Log.print(what); Log.print(") verified 0x");
+  Log.println(rb, HEX);
+  return true;
 }
 
 // ---- parameter encoding (AN619 section 3.2) ---------------------------------
@@ -263,7 +346,12 @@ static bool si5351Init() {
   setMultiSynth(4, MS4_A, MS4_B, MS4_C, 0);
 
   siWrite(169, 0x00);        // 8. zero phase offset on CLK4 (reg 165 + n)
-  siWrite(20, CLK4_CTRL);    // 9. CLK4 driver up, still gated off at reg 3
+
+  // 9. CLK4 driver up, still gated off at reg 3. Read back: this is the
+  //    register that decides drive strength (0x4F = 8 mA), and it is worth
+  //    being able to say what it actually contains rather than what was sent.
+  siWriteVerify(20, CLK4_CTRL, "CLK4 ctrl / 8 mA drive");
+
   siWrite(177, 0x20);        // 10. soft reset PLLA only
   delay(2);
 
@@ -287,21 +375,56 @@ static bool     g_lolA     = true;
 static bool     g_losClkin = true;
 static bool     g_refGood  = false;
 static bool     g_commOk   = false;
+static bool     g_dataOk   = false;
+static bool     g_bypassed = false;   // cross-check stood down this poll
 static uint32_t g_commErrs = 0;
+static uint32_t g_dataErrs = 0;
+static uint8_t  g_contradictions = 0; // consecutive rejected samples
 
 static void readStatus() {
   uint8_t r0, r1;
+  g_bypassed = false;
   g_commOk = siReadOk(0, r0) && siReadOk(1, r1);
   if (!g_commOk) {
     g_commErrs++;
     return;                  // leave previous flags alone; caller holds state
   }
+
+  // Cross-check: a live fault with a clear sticky counterpart cannot happen.
+  bool contradictory = (r0 & FAULT_MASK & ~r1) != 0;
+
+  if (contradictory && g_contradictions < CONTRADICTIONS_TO_TRUST) {
+    g_contradictions++;
+    g_dataErrs++;
+    g_dataOk = false;
+    g_reg0   = r0;           // keep the raw bytes for the log
+    g_sticky = r1;
+    // Deliberately NOT clearing reg 1: the sticky evidence accumulates for the
+    // next poll, which is what makes the following comparison stronger.
+    return;                  // decision flags untouched; caller holds state
+  }
+
+  if (contradictory) {
+    // Rejected too many times in a row. Either the bus is badly broken or the
+    // sticky assumption is wrong on this part. Believe the reading rather than
+    // risk holding CLK4 on through a real reference loss.
+    g_bypassed = true;
+  }
+
+  g_contradictions = 0;
+  g_dataOk   = true;
   g_reg0     = r0;
   g_sticky   = r1;
   g_sysInit  = (g_reg0 >> 7) & 1;
   g_lolA     = (g_reg0 >> 5) & 1;
   g_losClkin = (g_reg0 >> 4) & 1;
-  g_refGood  = !g_sysInit && !g_lolA && !g_losClkin;
+
+  // SYS_INIT is reported but deliberately NOT gated on. Its sticky is
+  // permanently asserted here, so a bit error in reg 0 bit 7 is undetectable
+  // and would otherwise be two polls away from cutting the CM4's clock.
+  // Startup is already covered: si5351Init() waits for SYS_INIT to clear, and
+  // a genuine device reset would show up on LOL_A as well.
+  g_refGood  = !g_lolA && !g_losClkin;
   siWrite(1, 0x00);          // clear sticky so the next read is fresh
 }
 
@@ -340,16 +463,26 @@ static void setClk4(bool on) {
 
 static void report(bool rbLocked) {
   Log.print("reg0=0x");     Log.print(g_reg0, HEX);
+  Log.print(" SYS_INIT=");  Log.print(g_sysInit);
   Log.print(" LOL_A=");     Log.print(g_lolA);
   Log.print(" LOS_CLKIN="); Log.print(g_losClkin);
   Log.print(" sticky=0x");  Log.print(g_sticky, HEX);
   Log.print(" Rb=");        Log.print(rbLocked ? "LOCKED" : "UNLOCKED");
   Log.print(" CLK4=");      Log.print(clk4Enabled ? "on" : "off");
-  Log.print(" i2cErr=");    Log.println(g_commErrs);
+  Log.print(" i2cErr=");    Log.print(g_commErrs);
+  Log.print(" dataErr=");   Log.println(g_dataErrs);
 
   if (!g_commOk)  Log.println("  !! I2C read failed (output state held)");
+  if (g_commOk && !g_dataOk) {
+    Log.print("  !! reading rejected: reg0 fault with clear sticky "
+              "(output state held), run=");
+    Log.println(g_contradictions);
+  }
+  if (g_bypassed) Log.println("  !! sticky cross-check bypassed after "
+                              "repeated rejections - reading believed");
   if (g_losClkin) Log.println("  !! no signal on CLKIN");
   if (g_lolA)     Log.println("  !! PLLA not locked");
+  if (g_sysInit)  Log.println("  !! SYS_INIT set (reported only, not gated on)");
   if (!rbLocked)  Log.println("  !! AR-40A unlocked or in holdover");
 }
 
@@ -369,8 +502,11 @@ void setup() {
   digitalWrite(STATUS_LED_PIN, LOW);
 
   // Wire on the Teensy 4.0 default pins: 18 = SDA, 19 = SCL.
+  // 100 kHz, not 400 kHz: the poll rate is 4 Hz, so bus speed buys nothing,
+  // and 400 kHz over wire on weak internal pull-ups is marginal. If dataErr
+  // keeps climbing, the next step is external 2.2k-4.7k pull-ups to 3V3.
   Wire.begin();
-  Wire.setClock(400000);
+  Wire.setClock(100000);
   delay(10);
 
   if (!si5351Init()) {
@@ -380,15 +516,18 @@ void setup() {
 
   Log.println("Si5351C: CLKIN 10 MHz -> PLLA 864 MHz -> CLK4 54 MHz");
   Log.println("CLK4 gated on LOS_CLKIN / LOL_A. BIT on pin 2 = indication only.");
+  Log.println("I2C 100 kHz. i2cErr = failed transactions, dataErr = readings "
+              "rejected by the reg0/reg1 sticky cross-check.");
 }
 
 void loop() {
   readStatus();
   bool locked = rubidiumLocked();
 
-  if (!g_commOk) {
-    // Bus failure tells us nothing about the reference. Hold the output where
-    // it is and do not touch the run counters.
+  if (!g_commOk || !g_dataOk) {
+    // Neither a bus failure nor a corrupted reading tells us anything about
+    // the reference. Hold the output where it is and do not touch the run
+    // counters.
   } else if (g_refGood) {
     badRuns = 0;
     if (goodRuns < GOOD_READS_TO_ENABLE) goodRuns++;
