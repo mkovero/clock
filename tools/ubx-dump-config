@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# ubx-dump-config — dump every CFG group from the ZED-F9T as restorable text.
+#
+# Reads both the RAM layer (what the receiver is doing right now) and the Flash
+# layer (what it will do after a power cycle). Those two disagreeing is itself
+# worth knowing, so they are kept in separate files rather than merged.
+#
+# Output is `ubxtool -g` text, which is directly reversible: every line carries
+# the key name and value, so a restore is a matter of feeding the non-default
+# ones back with `ubxtool -z <key>,<val>`.
+#
+#   ubx-dump-config <outdir>
+#
+# Polls only. Nothing here writes configuration to the receiver.
+
+set -uo pipefail
+
+OUT="${1:-.}"
+mkdir -p "$OUT" || exit 1
+
+TMPG=$(mktemp) || exit 1
+TMPP=$(mktemp) || exit 1
+trap 'rm -f "$TMPG" "$TMPP"' EXIT
+
+export UBXOPTS="${UBXOPTS:--P 29.00}"
+
+CFG_GROUPS="CFG-ANA CFG-BATCH CFG-GEOFENCE CFG-HW CFG-I2C CFG-I2CINPROT CFG-I2COUTPROT
+CFG-INFMSG CFG-ITFM CFG-LOGFILTER CFG-MOT CFG-MSGOUT CFG-NAVHPG CFG-NAVSPG CFG-NMEA
+CFG-ODO CFG-PM CFG-QZSS CFG-RATE CFG-RINV CFG-RTCM CFG-SBAS CFG-SEC CFG-SIGNAL CFG-SPI
+CFG-SPIINPROT CFG-SPIOUTPROT CFG-TMODE CFG-TP CFG-TXREADY CFG-UART1 CFG-UART1INPROT
+CFG-UART1OUTPROT CFG-UART2 CFG-UART2INPROT CFG-UART2OUTPROT CFG-USB CFG-USBINPROT
+CFG-USBOUTPROT"
+
+# layer number -> file suffix. 0 = RAM (live), 2 = Flash (survives power cycle).
+dump_layer() {
+	local layer="$1" name="$2" f="$OUT/f9t-config-$2.txt"
+
+	{
+		echo "# ZED-F9T configuration dump — $name layer (ubxtool layer $layer)"
+		echo "# host: $(hostname)   date: $(date -Is)"
+		echo "# device: $(gpspipe -w -n 3 2>/dev/null | jq -r 'select(.class=="DEVICES") | .devices[0] | "\(.driver) \(.subtype) \(.subtype1)"' | head -1)"
+		echo "#"
+		echo "# Restore one key with:  ubxtool -z <key>,<value>[,<layer>]"
+		echo
+	} >"$f"
+
+	for g in $CFG_GROUPS; do
+		# UBX-CFG-VALGET returns at most 64 items per response, so a large group
+		# (CFG-MSGOUT alone has hundreds) must be paged with the `position` field.
+		# Without this the dump silently truncates and is not a usable backup.
+		local pos=0 got total=0
+		: >"$TMPG"
+		while :; do
+			timeout 20 ubxtool -g "$g,$layer,$pos" 2>/dev/null \
+				| grep -oE 'item CFG-[A-Z0-9_]+-[A-Z0-9_]+/0x[0-9a-f]+ val [-0-9]+' \
+				| sed 's/^item //' >"$TMPP"
+			got=$(wc -l <"$TMPP")
+			cat "$TMPP" >>"$TMPG"
+			total=$((total + got))
+			[ "$got" -lt 64 ] && break
+			pos=$((pos + 64))
+		done
+		printf '  %-22s %s  %4d keys\n' "$g" "$name" "$total" >&2
+		{
+			echo "## $g"
+			sort -u "$TMPG"
+			echo
+		} >>"$f"
+	done
+
+	local n
+	n=$(grep -c '^CFG-' "$f")
+	echo "  -> $f ($n keys)" >&2
+}
+
+dump_layer 0 ram
+dump_layer 2 flash

@@ -1,0 +1,71 @@
+# ZED-F9T configuration changes for timing — applied 2026-09-10
+#
+# Format: <key> <value>   (blank lines and # comments ignored)
+# Apply with: tools/ubx-apply-config config/f9t-timing-changes.txt 7
+# Layer 7 = RAM + BBR + Flash, i.e. persistent across power cycles.
+#
+# Baseline before these changes is config/f9t-config-ram.txt / -flash.txt.
+
+# --- antenna cable delay -----------------------------------------------------
+#
+# Was 5 ns against an 8 m run (5 m + 3 m, RG-174/RG-58 class, solid PE, VF 0.66):
+#
+#   8.0 m / (0.660 * 299792458 m/s) = 40.4 ns
+#
+# Under-compensating by 35 ns makes the time pulse 35 ns late against UTC. This
+# is a systematic bias, not jitter, so no amount of averaging removes it — it was
+# the single largest error in the chain, ahead of chrony's 26 ns PPS std dev and
+# more than ten times the receiver's own 3 ns reported tAcc.
+#
+# Refinable to a couple of ns if the cable turns out to be PTFE (VF 0.695 -> 38 ns)
+# or foam PE (VF 0.83 -> 32 ns). Does not include antenna LNA group delay, which
+# is unspecified here and typically 10-30 ns; fold it in if it is ever measured.
+CFG-TP-ANT_CABLEDELAY 40
+
+# --- constellations ----------------------------------------------------------
+#
+# Baseline had GPS_L1CA, GPS_L2C, GAL_E1 live and nothing else. The
+# per-constellation master switches for SBAS, BDS, QZSS and GLO all read 1, which
+# is misleading: every signal underneath them read 0, so they contributed nothing.
+#
+# Galileo E5b makes Galileo dual-frequency, matching GPS. Dual-frequency gives the
+# ionosphere-free combination, which is the dominant residual error at this level
+# — that matters more for timing than satellite count. Galileo also flies passive
+# hydrogen masers and GST is steered tightly to UTC.
+CFG-SIGNAL-GAL_E5B_ENA 1
+
+# BeiDou B1I + B2I: a third independent dual-frequency system, CDMA rather than
+# FDMA, with usable BDS-3 MEO coverage at 60 N. Improves geometry and redundancy.
+CFG-SIGNAL-BDS_B1_ENA 1
+CFG-SIGNAL-BDS_B2_ENA 1
+
+# Deliberately NOT enabled, recorded so they are not "fixed" later by accident:
+#
+#   GLONASS  — FDMA, so each satellite sits on its own frequency and carries its
+#              own receiver hardware bias. Calibrating inter-frequency bias is a
+#              real job; timing configurations routinely leave GLONASS out.
+#   QZSS     — regional to Japan and Asia-Pacific. Nothing visible at 60 N.
+#   SBAS     — adds nothing to a fixed-position dual-frequency receiver, and the
+#              EGNOS geostationaries sit at low elevation from this latitude,
+#              which is exactly where multipath is worst.
+
+# --- stop being an RTK base station ------------------------------------------
+#
+# TMODE fixed turns the receiver into an RTK base, and all seven RTCM3 types were
+# being emitted on UART1 at 1 Hz: 1005 (station coords), 1077/1087/1097/1127 (GPS/
+# GLONASS/Galileo/BeiDou MSM7), 1230 (GLONASS biases) and 4072_1 (u-blox proprietary).
+# Nothing on this rig consumes any of it. It is pure UART load, and it is a large
+# part of why the NMEA cycle lands ~250 ms after the second at 38400 baud — which
+# spends half the +/-0.5 s budget that PPS second-numbering depends on.
+#
+# Note 1087 and 1127 were being emitted for constellations that are switched off.
+#
+# UART2 and USB are left alone: unused here, and leaving them keeps the base-station
+# capability available if it is ever wanted.
+CFG-MSGOUT-RTCM_3X_TYPE1005_UART1 0
+CFG-MSGOUT-RTCM_3X_TYPE1077_UART1 0
+CFG-MSGOUT-RTCM_3X_TYPE1087_UART1 0
+CFG-MSGOUT-RTCM_3X_TYPE1097_UART1 0
+CFG-MSGOUT-RTCM_3X_TYPE1127_UART1 0
+CFG-MSGOUT-RTCM_3X_TYPE1230_UART1 0
+CFG-MSGOUT-RTCM_3X_TYPE4072_1_UART1 0

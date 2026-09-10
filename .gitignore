@@ -1,0 +1,3 @@
+# NTRIP / DGNSS credentials for the Maanmittauslaitos FinnPos service.
+# Format, one per line:  NTRIP_USER=...  NTRIP_PASS=...
+.dgnss

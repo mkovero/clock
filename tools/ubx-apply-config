@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# ubx-apply-config — apply a list of CFG key/value pairs to the ZED-F9T.
+#
+#   ubx-apply-config <file> [layer] [--dry-run]
+#
+# <file> holds "<key> <value>" lines; # comments and blank lines are ignored.
+# [layer] is the ubxtool layer bitmask: 1 RAM, 2 BBR, 4 Flash, 7 all three.
+#         Default 1 (RAM only), so a power cycle undoes it — deliberate, because
+#         RAM-only is the right default for anything experimental. Pass 7 to make
+#         a change survive reboot.
+#
+# Reads each key back after writing and reports old -> new, so a silently refused
+# write cannot be mistaken for a successful one.
+
+set -uo pipefail
+
+FILE="${1:-}"
+LAYER="${2:-1}"
+DRY=0
+[ "${3:-}" = "--dry-run" ] && DRY=1
+[ "${2:-}" = "--dry-run" ] && { DRY=1; LAYER=1; }
+
+if [ -z "$FILE" ] || [ ! -r "$FILE" ]; then
+	echo "usage: $0 <keyfile> [layer] [--dry-run]" >&2
+	exit 2
+fi
+
+export UBXOPTS="${UBXOPTS:--P 29.00}"
+
+case "$LAYER" in
+	1) LNAME="RAM only (reverts on power cycle)" ;;
+	7) LNAME="RAM + BBR + Flash (persistent)" ;;
+	*) LNAME="layer bitmask $LAYER" ;;
+esac
+echo "Applying $FILE -> $LNAME"
+[ "$DRY" = "1" ] && echo "DRY RUN — nothing will be written"
+echo
+
+read_key() {
+	timeout 20 ubxtool -g "$1,0" 2>/dev/null \
+		| grep -oE "item $1/0x[0-9a-f]+ val [-0-9]+" \
+		| grep -oE 'val [-0-9]+' | awk '{print $2}' | head -1
+}
+
+RC=0
+while read -r key val _rest; do
+	case "$key" in ''|\#*) continue ;; esac
+	[ -z "${val:-}" ] && continue
+
+	before=$(read_key "$key")
+
+	if [ "$DRY" = "1" ]; then
+		printf '  %-34s %s -> %s  (dry run)\n' "$key" "${before:-?}" "$val"
+		continue
+	fi
+
+	if [ "${before:-}" = "$val" ]; then
+		printf '  %-34s already %s\n' "$key" "$val"
+		continue
+	fi
+
+	timeout 20 ubxtool -z "$key,$val,$LAYER" >/dev/null 2>&1
+	sleep 1
+	after=$(read_key "$key")
+
+	if [ "${after:-}" = "$val" ]; then
+		printf '  %-34s %s -> %s\n' "$key" "${before:-?}" "$after"
+	else
+		printf '  %-34s FAILED: wanted %s, reads %s\n' "$key" "$val" "${after:-?}"
+		RC=1
+	fi
+done <"$FILE"
+
+echo
+[ "$RC" = "0" ] && echo "all writes verified" || echo "SOME WRITES FAILED — see above"
+exit "$RC"
