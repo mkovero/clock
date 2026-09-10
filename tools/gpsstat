@@ -170,6 +170,55 @@ else
 	fail "gpsd returned no data on the socket"
 fi
 
+# ---------------------------------------------------------------- interference
+
+head_ "GNSS interference"
+
+# MON-RF is polled read-only. Each RF block has a receiver-classified jamming
+# state plus the raw 0..255 continuous-wave interference indicator. Keep both:
+# the state is immediately useful, while the raw value makes trends visible.
+RF_RAW=$(UBXOPTS="-P 29.00" timeout 8 ubxtool -p MON-RF "$F9T_TARGET" 2>/dev/null)
+RF_BLOCKS=0
+RF_ID=''; RF_FLAGS=''
+while IFS= read -r line; do
+	if [[ $line =~ blockId[[:space:]]+([0-9]+)[[:space:]]+flags[[:space:]]+x([[:xdigit:]]+) ]]; then
+		RF_ID=${BASH_REMATCH[1]}
+		RF_FLAGS=${BASH_REMATCH[2]}
+	elif [ -n "$RF_ID" ] && [[ $line =~ noisePerMS[[:space:]]+([0-9]+)[[:space:]]+agcCnt[[:space:]]+([0-9]+)[[:space:]]+jamInd[[:space:]]+([0-9]+) ]]; then
+		NOISE=${BASH_REMATCH[1]}; AGC=${BASH_REMATCH[2]}; JAM=${BASH_REMATCH[3]}
+		JSTATE=$((16#$RF_FLAGS & 3))
+		case "$JSTATE" in
+			0) JNAME=unknown ;; 1) JNAME=ok ;; 2) JNAME=warning ;; 3) JNAME=critical ;;
+		esac
+		printf '  RF block %s | jamming %s | indicator %s/255 | AGC %s | noise %s\n' \
+			"$RF_ID" "$JNAME" "$JAM" "$AGC" "$NOISE"
+		case "$JSTATE" in
+			0) warn "RF block $RF_ID jamming monitor unavailable" ;;
+			2) warn "RF block $RF_ID receiver jamming state is WARNING" ;;
+			3) fail "RF block $RF_ID receiver jamming state is CRITICAL" ;;
+		esac
+		RF_BLOCKS=$((RF_BLOCKS + 1)); RF_ID=''; RF_FLAGS=''
+	fi
+done <<<"$RF_RAW"
+[ "$RF_BLOCKS" -gt 0 ] || warn "could not read UBX-MON-RF interference monitor"
+
+# NAV-STATUS flags2 bits 3..4 are the receiver spoof-detection state. This is an
+# indicator, not proof that a signal is authentic: report its exact semantics.
+NAV_RAW=$(UBXOPTS="-P 29.00" timeout 8 ubxtool -p NAV-STATUS "$F9T_TARGET" 2>/dev/null)
+FLAGS2=$(grep -A1 'UBX-NAV-STATUS:' <<<"$NAV_RAW" \
+	| grep -oE 'flags2 (0)?x[0-9a-fA-F]+' | tail -1 | sed 's/.*x//')
+if [ -n "$FLAGS2" ]; then
+	SSTATE=$(((16#$FLAGS2 >> 3) & 3))
+	case "$SSTATE" in
+		0) SNAME=deactivated;      printf '  spoof detection | state %s | code %s\n' "$SNAME" "$SSTATE"; warn "receiver spoof detection is deactivated" ;;
+		1) SNAME=none-indicated;   printf '  spoof detection | state %s | code %s\n' "$SNAME" "$SSTATE"; ok "receiver reports no spoofing indicated" ;;
+		2) SNAME=indicated;        printf '  spoof detection | state %s | code %s\n' "$SNAME" "$SSTATE"; fail "receiver indicates possible GNSS spoofing" ;;
+		3) SNAME=multiple-indicated; printf '  spoof detection | state %s | code %s\n' "$SNAME" "$SSTATE"; fail "receiver indicates multiple GNSS spoofing detections" ;;
+	 esac
+else
+	warn "could not read UBX-NAV-STATUS spoof detector"
+fi
+
 # ---------------------------------------------------------------- accuracy
 
 head_ "accuracy"

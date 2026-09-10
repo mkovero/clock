@@ -1,0 +1,6 @@
+cd /public_html/clock
+put /home/mui/clock-dashboard/index.html index.html.new
+rename index.html.new index.html
+put /home/mui/clock-dashboard/data.json data.json.new
+rename data.json.new data.json
+chmod 644 data.json

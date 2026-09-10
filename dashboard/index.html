@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>aika — UTC timing observatory</title>
+  <style>
+    :root{--bg:#07100f;--panel:#0c1917;--panel2:#10211e;--ink:#e9fff7;--muted:#88a49b;--grid:#28423b;--mint:#60f5bd;--cyan:#55dff4;--amber:#ffc55c;--red:#ff6f78;--radius:18px}
+    *{box-sizing:border-box} html{background:var(--bg)} body{margin:0;color:var(--ink);font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:radial-gradient(circle at 78% -15%,#174b3d 0,transparent 35rem),linear-gradient(160deg,#07100f,#091512 60%,#06100e);min-height:100vh}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.045;background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);background-size:32px 32px}
+    main{width:min(1180px,calc(100% - 32px));margin:auto;padding:42px 0 64px;position:relative} header{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:30px}
+    .eyebrow{color:var(--mint);letter-spacing:.16em;text-transform:uppercase;font-size:12px}.brand{font:700 clamp(42px,8vw,88px)/.9 system-ui,sans-serif;letter-spacing:-.065em;margin:10px 0 16px}.dek{max-width:660px;color:#b7cec6;font:400 clamp(16px,2vw,20px)/1.5 system-ui,sans-serif;margin:0}
+    .status{border:1px solid var(--grid);background:#0a1614cc;border-radius:999px;padding:9px 14px;white-space:nowrap}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--muted);margin-right:8px;box-shadow:0 0 16px currentColor}.healthy .dot{background:var(--mint);color:var(--mint)}.degraded .dot{background:var(--amber);color:var(--amber)}.down .dot,.unavailable .dot{background:var(--red);color:var(--red)}
+    .mode-card{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:20px;margin-bottom:14px;padding:15px 20px}.mode-value{font:650 20px/1 system-ui,sans-serif;color:var(--amber)}.mode-detail{color:#abc2ba}.mode-progress{width:min(260px,25vw);height:7px;border-radius:5px;background:#1d332e;overflow:hidden}.mode-progress span{display:block;height:100%;background:linear-gradient(90deg,var(--amber),var(--mint))}
+    .hero{display:grid;grid-template-columns:1.5fr .7fr .7fr;gap:14px}.card{background:linear-gradient(145deg,#10211ee8,#0b1715e8);border:1px solid #213a34;border-radius:var(--radius);padding:22px;box-shadow:0 18px 50px #0004}.hero-main{min-height:230px;display:flex;flex-direction:column;justify-content:space-between}.label{color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase}.giant{font:650 clamp(42px,7vw,76px)/1 system-ui,sans-serif;letter-spacing:-.06em;margin:14px 0 8px}.unit{font-size:.42em;color:var(--mint);letter-spacing:-.02em}.explain{color:#aac1b9;max-width:53ch}.stat-value{font:650 clamp(28px,4vw,43px)/1.1 system-ui,sans-serif;letter-spacing:-.045em;margin:19px 0 8px}.stat-note{color:var(--muted);font-size:13px}.light{height:8px;background:#1d332e;border-radius:5px;overflow:hidden;margin-top:20px}.light span{display:block;height:100%;width:45%;background:linear-gradient(90deg,var(--mint),var(--cyan));box-shadow:0 0 18px var(--mint)}
+    .section-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:34px 0 12px}.section-head h2{font:650 22px/1 system-ui,sans-serif;margin:0}.ranges button{font:inherit;color:var(--muted);background:transparent;border:0;border-radius:8px;padding:6px 9px;cursor:pointer}.ranges button.active{background:#173029;color:var(--mint)}
+    .charts{display:grid;grid-template-columns:1.35fr .65fr;gap:14px}.chart{min-height:300px}.chart canvas{display:block;width:100%;height:225px;margin-top:15px}.legend{display:flex;gap:18px;color:var(--muted);font-size:12px;margin-top:8px}.key:before{content:"";display:inline-block;width:15px;height:2px;background:var(--key);vertical-align:middle;margin-right:7px}
+    .lower{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.constellations{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}.sat{border:1px solid var(--grid);border-radius:999px;padding:7px 11px;color:#cce0d9}.sat b{color:var(--cyan)}.checks{display:grid;gap:10px;margin-top:18px}.check{display:grid;grid-template-columns:54px 1fr;gap:10px}.check span:first-child{font-size:11px;padding-top:2px;color:var(--mint)}.check.warn span:first-child,.check.note span:first-child{color:var(--amber)}.check.fail span:first-child{color:var(--red)}
+    .integrity{font:650 clamp(27px,4vw,42px)/1.1 system-ui,sans-serif;margin:18px 0 8px}.integrity.ok{color:var(--mint)}.integrity.warning{color:var(--amber)}.integrity.critical{color:var(--red)}.rf-list{display:grid;gap:9px;margin-top:18px}.rf-row{display:flex;justify-content:space-between;border-bottom:1px solid var(--grid);padding-bottom:8px}.rf-row b{color:var(--cyan)}
+    .fineprint{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:34px;padding:24px 4px;border-top:1px solid var(--grid);color:var(--muted);font:13px/1.6 system-ui,sans-serif}.fineprint strong{color:#c6dcd4}.empty{display:none;padding:50px;text-align:center;color:var(--muted)}
+    @media(max-width:800px){header{display:block}.status{display:inline-block;margin-top:20px}.mode-card{grid-template-columns:1fr;gap:8px}.mode-progress{width:100%}.hero,.charts,.lower,.fineprint{grid-template-columns:1fr}.hero-main{min-height:200px}.chart{min-height:280px}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">GNSS · rubidium · stratum 1</div><h1 class="brand">aika</h1><p class="dek">A small timing observatory keeping a Raspberry Pi aligned to UTC, one pulse—and a few nanoseconds—at a time.</p></div>
+    <div id="status" class="status"><span class="dot"></span><span>loading telemetry</span></div>
+  </header>
+  <div id="empty" class="card empty">No telemetry yet. Run <code>clock-dashboard</code> once on aika.</div>
+  <div id="content" hidden>
+    <section id="mode-card" class="card mode-card"><div><div class="label">operating mode</div><div id="mode-value" class="mode-value">—</div></div><div id="mode-detail" class="mode-detail">—</div><div id="mode-progress" class="mode-progress"><span></span></div></section>
+    <section class="hero">
+      <div class="card hero-main"><div><div class="label">PPS short-term scatter · 1σ</div><div class="giant"><span id="jitter">—</span><span class="unit"> ns</span></div><div class="explain" id="light-copy">Measured by Chrony from the selected PPS source.</div></div><div class="light"><span id="light-bar"></span></div></div>
+      <div class="card"><div class="label">receiver estimate</div><div class="stat-value"><span id="tacc">—</span> ns</div><div class="stat-note">GNSS time-solution accuracy estimate, not a calibration certificate.</div></div>
+      <div class="card"><div class="label">sky view</div><div class="stat-value"><span id="used">—</span><small> / <span id="seen">—</span></small></div><div class="stat-note">satellites used / visible<br>PDOP <span id="pdop">—</span></div></div>
+    </section>
+    <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-hours="6">6h</button><button class="active" data-hours="24">24h</button><button data-hours="168">7d</button></div></div>
+    <section class="charts">
+      <div class="card chart"><div class="label">PPS phase & stability · nanoseconds</div><canvas id="timing-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">offset</span><span class="key" style="--key:var(--mint)">1σ scatter</span></div></div>
+      <div class="card chart"><div class="label">Satellites</div><canvas id="sat-chart"></canvas><div class="legend"><span class="key" style="--key:var(--mint)">used</span><span class="key" style="--key:var(--muted)">seen</span></div></div>
+    </section>
+    <section class="lower">
+      <div class="card chart"><div class="label">RF interference indicator · 0–255</div><canvas id="rf-chart"></canvas><div class="legend"><span class="key" style="--key:var(--amber)">RF block 0</span><span class="key" style="--key:var(--cyan)">RF block 1</span></div></div>
+      <div class="card"><div class="label">GNSS signal integrity</div><div id="integrity" class="integrity">—</div><div id="spoof">Spoof detector: —</div><div id="rf-list" class="rf-list"></div><p class="stat-note">Receiver-native indicators, not proof of interference or authenticity. Correlate alerts with signal levels, position, and time behavior.</p></div>
+    </section>
+    <section class="lower">
+      <div class="card"><div class="label">solution now</div><div class="stat-value"><span id="reference">—</span> <small>· stratum <span id="stratum">—</span></small></div><div id="constellations" class="constellations"></div><p class="stat-note">Best carrier-to-noise: <span id="cn0">—</span> dB-Hz · max-error bound <span id="max-error">—</span></p></div>
+      <div class="card"><div class="label">chain checks</div><div id="checks" class="checks"></div></div>
+    </section>
+    <footer class="fineprint"><div><strong>What this proves.</strong> The PPS offset and standard deviation describe how tightly the local clock follows the receiver pulse. The max-error value is Chrony’s current bound from root dispersion plus half root delay.</div><div><strong>What it does not prove.</strong> A constant receiver, antenna, or cable delay is absorbed by the servo and is invisible here. Absolute UTC bias needs external calibration (the planned PPP clock solution). Updated <span id="updated">—</span>.</div></footer>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s), css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let payload, hours=24;
+const finite=v=>typeof v==='number'&&Number.isFinite(v), fmt=(v,d=0)=>finite(v)?v.toLocaleString(undefined,{maximumFractionDigits:d}):'—';
+function compactNs(v){if(!finite(v))return '—';const a=Math.abs(v);if(a>=1e9)return `${fmt(v/1e9,3)} s`;if(a>=1e6)return `${fmt(v/1e6,3)} ms`;if(a>=1e3)return `${fmt(v/1e3,2)} µs`;return `${fmt(v,1)} ns`}
+function lineChart(canvas, rows, series, symmetric=false){
+  const dpr=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);const p={l:48,r:10,t:12,b:28},iw=w-p.l,ih=h-p.t-p.b;
+  const values=rows.flatMap(r=>series.map(s=>r[s.key])).filter(finite);if(!values.length){c.fillStyle=css('--muted');c.fillText('Awaiting samples',p.l,p.t+20);return}
+  let lo=Math.min(...values),hi=Math.max(...values);if(symmetric){hi=Math.max(Math.abs(lo),Math.abs(hi),1);lo=-hi}else{lo=Math.min(0,lo);hi=Math.max(hi,1)}if(lo===hi)hi=lo+1;
+  c.font='11px ui-monospace,monospace';c.lineWidth=1;c.strokeStyle=css('--grid');c.fillStyle=css('--muted');c.textAlign='right';for(let i=0;i<5;i++){const y=p.t+ih*i/4,val=hi-(hi-lo)*i/4;c.beginPath();c.moveTo(p.l,y);c.lineTo(w-p.r,y);c.stroke();c.fillText(fmt(val,Math.abs(hi-lo)<20?1:0),p.l-8,y+4)}
+  const start=Date.now()-hours*3600e3,end=Date.now(),x=t=>p.l+iw*(new Date(t)-start)/(end-start),y=v=>p.t+ih*(hi-v)/(hi-lo);
+  for(const s of series){c.strokeStyle=s.color;c.lineWidth=1.8;c.beginPath();let begun=false;for(const r of rows){if(!finite(r[s.key])){begun=false;continue}const xx=x(r.at),yy=y(r[s.key]);if(!begun){c.moveTo(xx,yy);begun=true}else c.lineTo(xx,yy)}c.stroke()}
+  c.fillStyle=css('--muted');c.textAlign='left';c.fillText(`${hours}h ago`,p.l,h-6);c.textAlign='right';c.fillText('now',w-p.r,h-6)
+}
+function render(){
+  const samples=payload.samples||[],latest=samples.at(-1);if(!latest){$('#empty').style.display='block';return}$('#content').hidden=false;
+  const status=$('#status'),age=Date.now()-new Date(latest.at);if(age>15*60e3){status.className='status unavailable';status.lastElementChild.textContent='telemetry stale'}else{status.className=`status ${latest.status}`;status.lastElementChild.textContent=latest.status==='healthy'?'timing chain healthy':latest.status}
+  const survey=latest.mode==='site-survey';$('#mode-value').textContent=survey?'SITE SURVEY':latest.mode==='fixed-timing'?'FIXED TIMING':'MODE UNKNOWN';$('#mode-detail').textContent=survey?(latest.survey_ready?`Target duration reached (${fmt(latest.survey_elapsed_hours,1)} h); ready to finish and restore fixed mode.`:`Receiver is roaming for position averaging · ${fmt(latest.survey_elapsed_hours,1)} of ${fmt(latest.survey_duration_hours,1)} h`):'Antenna position is fixed; PPS is optimized for timing.';$('#mode-progress').style.display=survey?'block':'none';$('#mode-progress span').style.width=`${latest.survey_progress_percent||0}%`;
+  $('#jitter').textContent=fmt(latest.pps_stddev_ns,1);$('#tacc').textContent=fmt(latest.receiver_tacc_ns,0);$('#used').textContent=fmt(latest.sats_used);$('#seen').textContent=fmt(latest.sats_seen);$('#pdop').textContent=fmt(latest.pdop,2);$('#reference').textContent=latest.ref||'—';$('#stratum').textContent=fmt(latest.stratum);
+  const metres=finite(latest.pps_stddev_ns)?latest.pps_stddev_ns*.299792458:null;$('#light-copy').textContent=finite(metres)?`Light travels ${fmt(metres,2)} metres in that time. This is measured local PPS scatter.`:'Measured by Chrony from the selected PPS source.';$('#light-bar').style.width=`${Math.min(100,Math.max(3,(latest.pps_stddev_ns||0)/1.2))}%`;
+  $('#cn0').textContent=(latest.best_cn0_dbhz||[]).map(v=>fmt(v,0)).join(' · ')||'—';$('#max-error').textContent=compactNs(latest.max_error_ns);$('#updated').textContent=new Date(payload.generated_at).toLocaleString();
+  const consts=$('#constellations');consts.replaceChildren();for(const [name,count] of Object.entries(latest.constellations||{})){const el=document.createElement('span');el.className='sat';el.append(name+' ');const b=document.createElement('b');b.textContent=count;el.append(b);consts.append(el)}
+  const checks=$('#checks');checks.replaceChildren();for(const item of (latest.checks||[]).filter(x=>x.level!=='ok').slice(0,6)){const row=document.createElement('div');row.className=`check ${item.level}`;const level=document.createElement('span'),copy=document.createElement('span');level.textContent=item.level.toUpperCase();copy.textContent=item.text;row.append(level,copy);checks.append(row)}if(!checks.children.length){checks.innerHTML='<div class="check"><span>OK</span><span>Every monitored link reports healthy.</span></div>'}
+  const blocks=latest.rf_blocks||[],rank={ok:0,unknown:1,warning:2,critical:3},worst=blocks.reduce((a,b)=>(rank[b.state]||0)>(rank[a]||0)?b.state:a,'ok'),spoofDanger=(latest.spoof_code||0)>=2,integrity=$('#integrity');integrity.textContent=spoofDanger?'SPOOFING INDICATED':worst==='critical'?'CRITICAL INTERFERENCE':worst==='warning'?'RF WARNING':'NO ALERTS';integrity.className=`integrity ${spoofDanger?'critical':worst}`;$('#spoof').textContent=`Spoof detector: ${(latest.spoof_state||'unavailable').replaceAll('-',' ')}`;const rfList=$('#rf-list');rfList.replaceChildren();for(const b of blocks){const row=document.createElement('div');row.className='rf-row';const name=document.createElement('span'),reading=document.createElement('b');name.textContent=`RF block ${b.id} · ${b.state}`;reading.textContent=`${b.jam_indicator}/255`;row.append(name,reading);rfList.append(row)}
+  const start=Date.now()-hours*3600e3,rows=samples.filter(s=>new Date(s.at)>=start);lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],true);lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);const rfRows=rows.map(s=>({...s,jam0:(s.rf_blocks||[]).find(b=>b.id===0)?.jam_indicator,jam1:(s.rf_blocks||[]).find(b=>b.id===1)?.jam_indicator}));lineChart($('#rf-chart'),rfRows,[{key:'jam0',color:css('--amber')},{key:'jam1',color:css('--cyan')}]);
+}
+document.querySelectorAll('[data-hours]').forEach(b=>b.onclick=()=>{hours=+b.dataset.hours;document.querySelectorAll('[data-hours]').forEach(x=>x.classList.toggle('active',x===b));render()});addEventListener('resize',()=>payload&&render());
+fetch('data.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(x=>{payload=x;render()}).catch(()=>{$('#status').lastElementChild.textContent='telemetry unavailable';$('#status').classList.add('unavailable');$('#empty').style.display='block'});
+</script>
+</body>
+</html>

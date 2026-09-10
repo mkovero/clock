@@ -1224,6 +1224,22 @@ The dead RTC is reported as `NOTE` rather than `WARN`: known, on the list, and
 deliberately not counted against the exit code so that a non-zero exit stays meaningful
 for things that are actually news.
 
+### Static status page — `tools/clock-dashboard`
+
+`tools/clock-dashboard` runs `gpsstat`, parses its stable machine-relevant values, and
+keeps a compact rolling JSON-lines history. It atomically generates `data.json` for the
+self-contained dashboard in `dashboard/index.html`. The page plots PPS phase/scatter and
+satellite usage, shows survey/fixed operating mode, the receiver time-accuracy estimate,
+F9T jamming/spoof indicators, and every non-OK chain check. It visibly marks telemetry
+stale if collection stops for 15 minutes. It uses no build system or external CDN, so
+aika can generate it offline and publish the two static files with cron and SFTP.
+Installation and the live deployment are documented in `dashboard/README.md`.
+
+The page deliberately does not call servo offset "absolute accuracy". Constant antenna,
+receiver, cable, and timestamp delays are absorbed when chrony steers the same clock it
+measures; the PPP clock series described in §10 is still needed to establish absolute
+UTC bias.
+
 ### Housekeeping seen in passing
 
 - `ser2net` confirmed `inactive` after the move — the stale TCP-2000 listener that would
@@ -1353,6 +1369,7 @@ fact, so nothing borrows another receiver's clock. `[plan]`
 | `tools/f9t-survey` | run the position survey and freeze the result back into TMODE |
 | `tools/ntrip-relay` | NTRIP client and local re-caster; unused in steady state |
 | `tools/f9t-ppp` | RAWX → RINEX via `convbin`, for submission to a PPP service |
+| `tools/clock-dashboard` | archive `gpsstat` snapshots and generate static dashboard data |
 
 Two traps these encode, both of which cost real time:
 

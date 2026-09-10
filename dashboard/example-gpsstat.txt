@@ -1,0 +1,39 @@
+
+chrony
+  ref 50505332 (PPS2) | stratum 1 | 0.000000004 seconds fast of NTP time | RMS 31ns
+  OK    disciplined by PPS2 (GNSS 1 PPS via PHC)
+  OK    refclock PPS2 reach 377, last -4ns
+
+gpsd -> chrony SHM
+  gpsd up since Thu 2026-09-10 18:04:04 UTC
+  OK    SHM(0) live — 3 samples in 4 s
+
+GNSS fix
+  time 2026-09-10T21:42:01.000Z | leap 18 | sats 17 used / 28 seen | PDOP 1.24 TDOP 0.62
+  constellations in solution:  GPS 7  Galileo 6  BeiDou 4
+  OK    3D fix
+  best C/N0 (used): 48 46 44 43 dB-Hz
+  OK    signal level healthy
+
+accuracy
+  receiver time accuracy (NAV-TIMEGPS tAcc) : 3 ns
+  OK    receiver time solution tight
+  chrony PPS2 offset / std dev              : -4ns 27ns
+  system clock max error (disp + delay/2)   : 0.000000041 s
+  chrony RMS offset (long-term average)     : 31ns
+
+GNSS interference
+  RF block 0 | jamming warning | indicator 60/255 | AGC 5967 | noise 63
+  WARN  RF block 0 receiver jamming state is WARNING
+  RF block 1 | jamming ok | indicator 9/255 | AGC 5616 | noise 48
+  spoof detection | state none-indicated | code 1
+  OK    receiver reports no spoofing indicated
+
+hardware / boot
+  NOTE  RTC has no backup cell — clock steps at every cold boot, which is what
+        silently kills gpsd SHM. Restart gpsd after a cold boot until fixed.
+  OK    ser2net inactive (no contention on /dev/ttyAMA0)
+  OK    PHC /dev/ptp0 is bcm_phy_ptp (PPS via BCM54210PE external timestamp)
+
+verdict
+  GNSS timing chain healthy

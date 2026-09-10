@@ -1,0 +1,4 @@
+#!/bin/sh
+# Used by publish-clock-dashboard. SSH_ASKPASS keeps the secret out of command-line
+# arguments and logs; this helper must never print anything except the password.
+exec sed -n '1p' /home/mui/.ftpauth

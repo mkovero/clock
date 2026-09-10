@@ -1,0 +1,7 @@
+# Installed as /etc/cron.d/aika-clock-dashboard on aika.
+# Collection is local and private; a public-host upload command can be appended once
+# its SSH destination and document root are known.
+SHELL=/bin/sh
+PATH=/home/mui/bin:/usr/local/bin:/usr/bin:/bin
+
+*/5 * * * * mui /home/mui/bin/clock-dashboard --gpsstat /home/mui/bin/gpsstat --history /home/mui/.local/state/clock-dashboard/history.jsonl --output /home/mui/clock-dashboard/data.json >>/home/mui/.local/state/clock-dashboard/cron.log 2>&1 && /home/mui/bin/publish-clock-dashboard >>/home/mui/.local/state/clock-dashboard/cron.log 2>&1

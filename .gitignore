@@ -1,3 +1,7 @@
 # NTRIP / DGNSS credentials for the Maanmittauslaitos FinnPos service.
 # Format, one per line:  NTRIP_USER=...  NTRIP_PASS=...
 .dgnss
+.ftpauth
+# Local Python bytecode from checking the dashboard collector.
+__pycache__/
+*.pyc

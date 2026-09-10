@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""Collect gpsstat output and build the data file for the static clock dashboard."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+SCHEMA_VERSION = 1
+STATUS_RE = re.compile(r"^  (OK|WARN|FAIL|NOTE)\s+(.*)$")
+NUMBER_RE = re.compile(r"([+-]?[0-9]+(?:\.[0-9]+)?)\s*(ns|us|ms|s|seconds?)?", re.I)
+UNIT_NS = {"ns": 1.0, "us": 1_000.0, "ms": 1_000_000.0, "s": 1_000_000_000.0,
+           "second": 1_000_000_000.0, "seconds": 1_000_000_000.0}
+
+
+def quantity_ns(value: str) -> float | None:
+    match = NUMBER_RE.search(value.strip())
+    if not match:
+        return None
+    unit = (match.group(2) or "s").lower()
+    result = float(match.group(1)) * UNIT_NS[unit]
+    return result if math.isfinite(result) else None
+
+
+def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
+    sample: dict = {
+        "at": collected_at,
+        "status": {0: "healthy", 1: "degraded", 2: "down"}.get(returncode, "unavailable"),
+        "exit_code": returncode,
+        "checks": [],
+    }
+
+    for line in text.splitlines():
+        status = STATUS_RE.match(line)
+        if status:
+            sample["checks"].append({"level": status.group(1).lower(), "text": status.group(2)})
+            continue
+
+        match = re.match(
+            r"^  ref (.*?) \| stratum (.*?) \| (.*?) \| RMS (.*?)$", line
+        )
+        if match:
+            ref = match.group(1)
+            ref_name = re.search(r"\(([^()]+)\)$", ref)
+            sample.update(ref=ref_name.group(1) if ref_name else ref,
+                          ref_id=ref, stratum=integer(match.group(2)),
+                          system_time=match.group(3), rms=match.group(4),
+                          rms_ns=quantity_ns(match.group(4)))
+            continue
+
+        match = re.match(
+            r"^  time (.*?) \| leap (.*?) \| sats (\d+) used / (\d+) seen \| PDOP (.*?) TDOP (.*?)$",
+            line,
+        )
+        if match:
+            sample.update(gnss_time=match.group(1), leap_seconds=value(match.group(2)),
+                          sats_used=int(match.group(3)), sats_seen=int(match.group(4)),
+                          pdop=number(match.group(5)), tdop=number(match.group(6)))
+            continue
+
+        match = re.match(r"^  constellations in solution:\s*(.*)$", line)
+        if match:
+            tokens = match.group(1).split()
+            sample["constellations"] = {
+                tokens[i]: int(tokens[i + 1]) for i in range(0, len(tokens) - 1, 2)
+                if tokens[i + 1].isdigit()
+            }
+            continue
+
+        match = re.match(r"^  best C/N0 \(used\):\s*(.*?)\s+dB-Hz$", line)
+        if match:
+            sample["best_cn0_dbhz"] = [number(item) for item in match.group(1).split()]
+            sample["best_cn0_dbhz"] = [item for item in sample["best_cn0_dbhz"] if item is not None]
+            continue
+
+        match = re.match(r"^  receiver time accuracy .*:\s*(.*?)\s*$", line)
+        if match:
+            sample["receiver_tacc_ns"] = quantity_ns(match.group(1) + " ns")
+            continue
+
+        match = re.match(r"^  chrony PPS2 offset / std dev\s*:\s*(\S+)\s+(\S+)$", line)
+        if match:
+            sample["pps_offset_ns"] = quantity_ns(match.group(1))
+            sample["pps_stddev_ns"] = quantity_ns(match.group(2))
+            continue
+
+        match = re.match(r"^  system clock max error .*:\s*(.*?)\s*$", line)
+        if match:
+            sample["max_error_ns"] = quantity_ns(match.group(1))
+            continue
+
+        match = re.match(r"^  gpsd up since\s+(.*)$", line)
+        if match:
+            sample["gpsd_since"] = match.group(1)
+            continue
+
+        match = re.match(
+            r"^  RF block (\d+) \| jamming ([a-z-]+) \| indicator (\d+)/255"
+            r" \| AGC (\d+) \| noise (\d+)$", line
+        )
+        if match:
+            sample.setdefault("rf_blocks", []).append({
+                "id": int(match.group(1)), "state": match.group(2),
+                "jam_indicator": int(match.group(3)), "agc": int(match.group(4)),
+                "noise_per_ms": int(match.group(5)),
+            })
+            continue
+
+        match = re.match(r"^  spoof detection \| state ([a-z-]+) \| code (\d+)$", line)
+        if match:
+            sample["spoof_state"] = match.group(1)
+            sample["spoof_code"] = int(match.group(2))
+
+    return sample
+
+
+def number(raw: str) -> float | None:
+    try:
+        result = float(raw)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def integer(raw: str) -> int | None:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def value(raw: str) -> int | float | str | None:
+    if raw == "-":
+        return None
+    parsed = number(raw)
+    return parsed if parsed is not None else raw
+
+
+def operating_mode(path: Path, now: datetime) -> dict:
+    if not path.exists():
+        return {"mode": "fixed-timing"}
+    fields = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, separator, item = line.partition("=")
+            if separator:
+                fields[key] = item
+        if "finished" in fields:
+            return {"mode": "fixed-timing"}
+        started = datetime.fromisoformat(fields["started"])
+        duration_hours = float(fields["hours"])
+        elapsed_hours = max(0.0, (now - started).total_seconds() / 3600)
+        return {
+            "mode": "site-survey",
+            "survey_started": started.isoformat(),
+            "survey_duration_hours": duration_hours,
+            "survey_elapsed_hours": elapsed_hours,
+            "survey_progress_percent": min(100.0, 100 * elapsed_hours / duration_hours),
+            "survey_ready": elapsed_hours >= duration_hours,
+        }
+    except (OSError, KeyError, UnicodeError, ValueError, ZeroDivisionError):
+        return {"mode": "unknown"}
+
+
+def read_history(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    samples = []
+    with path.open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, 1):
+            try:
+                item = json.loads(line)
+                datetime.fromisoformat(item["at"].replace("Z", "+00:00"))
+                samples.append(item)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                print(f"clock-dashboard: ignoring malformed history line {line_number}", file=sys.stderr)
+    return samples
+
+
+def atomic_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o644)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def atomic_history(path: Path, samples: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            for item in samples:
+                stream.write(json.dumps(item, separators=(",", ":"), ensure_ascii=False,
+                                        allow_nan=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def public_history(samples: list[dict], now: datetime) -> list[dict]:
+    """Keep recent charts dense and make older public data cheap to upload."""
+    if not samples:
+        return []
+    chart_keys = (
+        "at", "status", "pps_offset_ns", "pps_stddev_ns", "receiver_tacc_ns",
+        "max_error_ns", "sats_used", "sats_seen", "rf_blocks", "spoof_state",
+        "spoof_code", "mode",
+    )
+    recent_cutoff = now - timedelta(hours=24)
+    selected: dict[int, dict] = {}
+    recent = []
+    for item in samples[:-1]:
+        timestamp = datetime.fromisoformat(item["at"].replace("Z", "+00:00"))
+        if timestamp >= recent_cutoff:
+            recent.append(item)
+        else:
+            selected[int(timestamp.timestamp()) // 1800] = item
+    history = list(selected.values()) + recent
+    compact = [{key: item[key] for key in chart_keys if key in item} for item in history]
+    compact.append(samples[-1])
+    return compact
+
+
+def main() -> int:
+    state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gpsstat", default="gpsstat", help="gpsstat executable (default: %(default)s)")
+    parser.add_argument("--input", type=Path, help="parse saved gpsstat output instead of running it")
+    parser.add_argument("--input-exit-code", type=int, choices=range(0, 3), default=0)
+    parser.add_argument("--history", type=Path,
+                        default=state_home / "clock-dashboard/history.jsonl")
+    parser.add_argument("--output", type=Path, default=Path("data.json"))
+    parser.add_argument("--survey-meta", type=Path,
+                        default=Path.home() / "f9t-survey/survey.meta")
+    parser.add_argument("--retention-days", type=float, default=14.0)
+    parser.add_argument("--timeout", type=float, default=45.0)
+    args = parser.parse_args()
+
+    if args.retention_days <= 0:
+        parser.error("--retention-days must be positive")
+
+    now = datetime.now(timezone.utc)
+    collected_at = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+    if args.input:
+        output = args.input.read_text(encoding="utf-8")
+        returncode = args.input_exit_code
+    else:
+        try:
+            result = subprocess.run([args.gpsstat], capture_output=True, text=True,
+                                    timeout=args.timeout, check=False)
+            output = result.stdout
+            returncode = result.returncode
+            if result.stderr:
+                print(result.stderr.rstrip(), file=sys.stderr)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            output = ""
+            returncode = 127
+            print(f"clock-dashboard: {error}", file=sys.stderr)
+
+    sample = parse_gpsstat(output, returncode, collected_at)
+    sample.update(operating_mode(args.survey_meta, now))
+    args.history.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = args.history.with_suffix(args.history.suffix + ".lock")
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        samples = read_history(args.history)
+        samples.append(sample)
+        cutoff = now - timedelta(days=args.retention_days)
+        samples = [item for item in samples if
+                   datetime.fromisoformat(item["at"].replace("Z", "+00:00")) >= cutoff]
+        atomic_history(args.history, samples)
+        atomic_json(args.output, {
+            "schema": SCHEMA_VERSION,
+            "generated_at": collected_at,
+            "retention_days": args.retention_days,
+            "samples": public_history(samples, now),
+        })
+
+    print(f"clock-dashboard: wrote {len(samples)} samples to {args.output}")
+    return 0 if returncode in (0, 1, 2) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

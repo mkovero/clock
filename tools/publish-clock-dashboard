@@ -1,0 +1,10 @@
+#!/bin/sh
+# Atomically publish aika's static dashboard through the hosting provider's SFTP.
+set -eu
+
+export SSH_ASKPASS=/home/mui/bin/clock-dashboard-askpass
+export SSH_ASKPASS_REQUIRE=force
+export DISPLAY=aika-dashboard
+
+exec setsid -w sftp -q -oStrictHostKeyChecking=accept-new \
+    user7983935@ftp.kuvat.fi </home/mui/clock-dashboard/sftp.batch >/dev/null
