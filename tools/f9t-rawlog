@@ -177,8 +177,43 @@ cmd_stop() {
 	echo "  logger stopped; log kept at $LOG"
 }
 
+# Run from cron. The failure this guards against has already happened once: on
+# 2026-09-11 a gpsd restart dropped the survey's logger and the run kept its clock
+# going for nine hours while collecting nothing. The retry loop inside `start`
+# covers gpspipe dying; this covers the loop itself dying, and covers a reboot,
+# which also clears the RAM-layer RAWX settings.
+cmd_watchdog() {
+	[ -f "$META" ] || exit 0            # nothing running, nothing to guard
+	# shellcheck disable=SC1090
+	. "$META"
+
+	local stamp; stamp=$(date -Is)
+
+	# Past its planned duration? Leave it alone; stopping is a human decision.
+	local elapsed_h
+	elapsed_h=$(( ( $(date +%s) - $(date -d "$started" +%s) ) / 3600 ))
+	[ "$elapsed_h" -ge "$hours" ] && exit 0
+
+	if ! pgrep -x gpspipe >/dev/null; then
+		echo "$stamp watchdog: logger gone, restarting"
+		nohup sh -c "while :; do gpspipe -R >>'$LOG' 2>/dev/null; sleep 5; done" \
+			>/dev/null 2>&1 &
+		sed -i '/^rawx_pid=/d' "$META"
+		echo "rawx_pid=$!" >>"$META"
+	fi
+
+	# A reboot clears the RAM-layer message settings, so the logger would run on
+	# happily while the receiver emitted no RAWX at all.
+	if [ "$(getkey CFG-MSGOUT-UBX_RXM_RAWX_UART1)" != "1" ]; then
+		echo "$stamp watchdog: RAWX disabled on the receiver, re-enabling"
+		setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 1 1
+		setkey CFG-MSGOUT-UBX_RXM_SFRBX_UART1 1 1
+	fi
+}
+
 case "${1:-}" in
 	start)  shift; cmd_start "$@" ;;
+	watchdog) cmd_watchdog ;;
 	status) cmd_status ;;
 	stop)   cmd_stop ;;
 	*) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
