@@ -37,7 +37,7 @@
       <div class="card"><div class="label">sky view</div><div class="stat-value"><span id="used">—</span><small> / <span id="seen">—</span></small></div><div class="stat-note">satellites used / visible<br>PDOP <span id="pdop">—</span></div></div>
       <div class="card"><div class="label">reference oscillator</div><div class="stat-value"><span id="rbfreq">—</span> <small>ppb</small></div><div class="stat-note">AR-40A vs GNSS, uncertainty <span id="rbskew">—</span> ppb. The CM4 timebase is the rubidium, so Chrony&rsquo;s frequency estimate measures it directly. Costs <span id="rbholdover">—</span> µs/day of drift if GNSS is lost; <span id="rbturns">—</span> turns of 10 on the mechanical trim would null it.</div></div>
     </section>
-    <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-hours="6">6h</button><button class="active" data-hours="24">24h</button><button data-hours="168">7d</button><button id="smooth-btn" title="Rolling median over the chart window. Median rather than mean: spikes are outliers, and a mean smears them across neighbouring samples instead of rejecting them.">raw</button></div></div>
+    <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-hours="6">6h</button><button class="active" data-hours="24">24h</button><button data-hours="168">7d</button><button id="smooth-btn" title="Rolling median over the chart window. Median rather than mean: spikes are outliers, and a mean smears them across neighbouring samples instead of rejecting them.">median</button></div></div>
     <section class="charts">
       <div class="card chart"><div class="label">PPS phase & stability · nanoseconds</div><canvas id="timing-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">offset</span><span class="key" style="--key:var(--mint)">1σ scatter</span></div></div>
       <div class="card chart"><div class="label">Satellites</div><canvas id="sat-chart"></canvas><div class="legend"><span class="key" style="--key:var(--mint)">used</span><span class="key" style="--key:var(--muted)">seen</span></div></div>
@@ -57,6 +57,7 @@
 <script>
 const $=s=>document.querySelector(s), css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 let payload, hours=24, smooth=false;
+try{smooth=localStorage.getItem('clock-smooth')==='1'}catch{}
 const finite=v=>typeof v==='number'&&Number.isFinite(v), fmt=(v,d=0)=>finite(v)?v.toLocaleString(undefined,{maximumFractionDigits:d}):'—';
 function compactNs(v){if(!finite(v))return '—';const a=Math.abs(v);if(a>=1e9)return `${fmt(v/1e9,3)} s`;if(a>=1e6)return `${fmt(v/1e6,3)} ms`;if(a>=1e3)return `${fmt(v/1e3,2)} µs`;return `${fmt(v,1)} ns`}
 function lineChart(canvas, rows, series, symmetric=false){
@@ -106,17 +107,19 @@ function render(){
   const keys=['pps_offset_ns','pps_stddev_ns','sats_seen','sats_used','jam0','jam1','rbppb'];
   const win=medianWindow(base.length),rows=smooth?medianRows(base,keys,win):base;
   const btn=$('#smooth-btn');btn.classList.toggle('active',smooth);
-  if(smooth&&base.length>1){
+  let label='median';
+  if(base.length>1){
     const spanMin=(new Date(base.at(-1).at)-new Date(base[0].at))/6e4;
     const winMin=Math.round(spanMin/(base.length-1)*win);
-    btn.textContent=winMin>=60?`median · ${fmt(winMin/60,1)} h`:`median · ${winMin} min`;
-  }else{btn.textContent=smooth?'median':'raw'}
+    label+=winMin>=60?` · ${fmt(winMin/60,1)} h`:` · ${winMin} min`;
+  }
+  btn.textContent=label;
   lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],true);
   lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);
   lineChart($('#rf-chart'),rows,[{key:'jam0',color:css('--amber')},{key:'jam1',color:css('--cyan')}]);
   lineChart($('#rb-chart'),rows,[{key:'rbppb',color:css('--amber')}],true);
 }
-document.querySelectorAll('[data-hours]').forEach(b=>b.onclick=()=>{hours=+b.dataset.hours;document.querySelectorAll('[data-hours]').forEach(x=>x.classList.toggle('active',x===b));render()});$('#smooth-btn').onclick=()=>{smooth=!smooth;render()};addEventListener('resize',()=>payload&&render());
+document.querySelectorAll('[data-hours]').forEach(b=>b.onclick=()=>{hours=+b.dataset.hours;document.querySelectorAll('[data-hours]').forEach(x=>x.classList.toggle('active',x===b));render()});$('#smooth-btn').onclick=()=>{smooth=!smooth;try{localStorage.setItem('clock-smooth',smooth?'1':'0')}catch{};render()};addEventListener('resize',()=>payload&&render());
 fetch('data.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(x=>{payload=x;render()}).catch(()=>{$('#status').lastElementChild.textContent='telemetry unavailable';$('#status').classList.add('unavailable');$('#empty').style.display='block'});
 </script>
 </body>
