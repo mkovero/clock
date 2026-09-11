@@ -88,9 +88,14 @@ cmd_start() {
 	# UBX stream including RXM-RAWX, which is the input to a later PPP solution.
 	echo
 	echo "Starting loggers:"
-	nohup sh -c "gpspipe -w >>'$LOG'" >/dev/null 2>&1 &
+	# Wrapped in a retry loop, not run bare. gpspipe is a gpsd client, so anything
+	# that restarts gpsd — a baud change, a device-list edit, a package upgrade —
+	# drops it, and the survey then keeps its clock running while collecting
+	# nothing. That happened on 2026-09-11 and cost nine hours of rover mode for
+	# no data. The loop reconnects instead.
+	nohup sh -c "while :; do gpspipe -w >>'$LOG' 2>/dev/null; sleep 5; done" >/dev/null 2>&1 &
 	echo "json_pid=$!" >>"$META"
-	nohup sh -c "gpspipe -R >>'$RAWX'" >/dev/null 2>&1 &
+	nohup sh -c "while :; do gpspipe -R >>'$RAWX' 2>/dev/null; sleep 5; done" >/dev/null 2>&1 &
 	echo "rawx_pid=$!" >>"$META"
 	sleep 3
 	printf '  position log %s (%s lines)\n' "$LOG" "$(wc -l <"$LOG" 2>/dev/null || echo 0)"
@@ -120,8 +125,9 @@ cmd_status() {
 	[ "${n:-0}" -lt 2 ] && { echo "not enough data yet"; return 0; }
 
 	python3 - "$LOG" "$elapsed" <<'PY'
-import json, sys, math
-hours_elapsed = float(sys.argv[2])/60.0
+import json, sys, math, datetime
+wall_elapsed = float(sys.argv[2])/60.0
+stamps=[]
 lat=[]; lon=[]; alt=[]; modes={}
 for line in open(sys.argv[1]):
     try: d=json.loads(line)
@@ -130,20 +136,32 @@ for line in open(sys.argv[1]):
     modes[d.get("status",0)]=modes.get(d.get("status",0),0)+1
     if d.get("mode")!=3: continue
     if None in (d.get("lat"), d.get("lon")): continue
-    lat.append(d["lat"]); lon.append(d["lon"]); alt.append(d.get("altHAE", d.get("alt",0)))
+    if "altHAE" not in d: continue          # never fall back to MSL: ~17 m out here
+    lat.append(d["lat"]); lon.append(d["lon"]); alt.append(d["altHAE"])
+    if d.get("time"): stamps.append(d["time"])
 if not lat:
     print("no 3D fixes yet"); raise SystemExit
 def stat(v):
     m=sum(v)/len(v)
     sd=math.sqrt(sum((x-m)**2 for x in v)/len(v)) if len(v)>1 else 0.0
     return m, sd
-mlat,slat=stat(lat); mlon,slon=stat(lon); malt,salt=stat(alt)
+def robust(v):
+    """Median and MAD-derived sigma. A receiver being reconfigured emits wild
+    fixes — restarting gpsd, changing UART baud, reacquiring — and a handful of
+    them drags a mean and inflates an sd out of all proportion. The median does
+    not move and the MAD does not inflate."""
+    srt=sorted(v); n=len(srt)
+    med=srt[n//2] if n%2 else (srt[n//2-1]+srt[n//2])/2
+    dev=sorted(abs(x-med) for x in v)
+    mad=dev[n//2] if n%2 else (dev[n//2-1]+dev[n//2])/2
+    return med, mad*1.4826
+mlat,slat=robust(lat); mlon,slon=robust(lon); malt,salt=robust(alt)
 # metres per degree at this latitude
 mlat_m = 111132.0
 mlon_m = 111320.0*math.cos(math.radians(mlat))
-print(f"\nmean lat  {mlat:.9f}  sd {slat*mlat_m:6.2f} m")
-print(f"mean lon  {mlon:.9f}  sd {slon*mlon_m:6.2f} m")
-print(f"mean hae  {malt:.3f} m      sd {salt:6.2f} m")
+print(f"\nmedian lat  {mlat:.9f}  sigma {slat*mlat_m:6.2f} m  (MAD-derived)")
+print(f"median lon  {mlon:.9f}  sigma {slon*mlon_m:6.2f} m")
+print(f"median hae  {malt:.3f} m      sigma {salt:6.2f} m")
 # gpsd status 2 = DGPS corrections applied. Expected to be zero here: this rig
 # surveys standalone on purpose. Differential corrections carry the reference
 # station's own receiver clock offset, which is a harmless nuisance parameter
@@ -162,7 +180,17 @@ if tot:
 # independent sample per hour of elapsed time instead.
 sd_h = slat*mlat_m
 naive = sd_h/math.sqrt(len(lat))
-span_h = max(hours_elapsed, 1.0/60)
+# Span of the data actually logged, which is not the same as time elapsed.
+if len(stamps) > 1:
+    t0=datetime.datetime.fromisoformat(stamps[0].replace("Z","+00:00"))
+    t1=datetime.datetime.fromisoformat(stamps[-1].replace("Z","+00:00"))
+    data_h=(t1-t0).total_seconds()/3600.0
+else:
+    data_h=0.0
+if data_h > 0 and data_h < wall_elapsed*0.95:
+    print(f"\nWARNING: logging covers {data_h:.1f} h of {wall_elapsed:.1f} h elapsed")
+    print("         the loggers stopped; accuracy below is scaled to real coverage")
+span_h = max(data_h if data_h > 0 else wall_elapsed, 1.0/60)
 neff = max(1.0, span_h)
 honest = max(sd_h/math.sqrt(neff), 0.10)
 print(f"\nscatter (sd, horizontal)      {sd_h:.2f} m")
@@ -181,21 +209,52 @@ cmd_finish() {
 	span_h=$(python3 -c "import sys,datetime;a=datetime.datetime.fromisoformat(sys.argv[1]);print((datetime.datetime.now(a.tzinfo)-a).total_seconds()/3600)" "$started")
 	out=$(python3 - "$LOG" "$span_h" <<'PY'
 import json, sys, math
-lat=[]; lon=[]; alt=[]
+lat=[]; lon=[]; alt=[]; stamps=[]
 for line in open(sys.argv[1]):
     try: d=json.loads(line)
     except Exception: continue
     if d.get("class")!="TPV" or d.get("mode")!=3: continue
     if None in (d.get("lat"), d.get("lon")): continue
-    lat.append(d["lat"]); lon.append(d["lon"]); alt.append(d.get("altHAE", d.get("alt",0)))
+    if "altHAE" not in d: continue
+    lat.append(d["lat"]); lon.append(d["lon"]); alt.append(d["altHAE"])
+    if d.get("time"): stamps.append(d["time"])
 if len(lat) < 60:
     print("TOOFEW"); raise SystemExit
-mlat=sum(lat)/len(lat); mlon=sum(lon)/len(lon); malt=sum(alt)/len(alt)
-sd=math.sqrt(sum((x-mlat)**2 for x in lat)/len(lat))*111132.0
+# Reject outliers before averaging. The log can contain fixes taken while the
+# receiver was being reconfigured — a gpsd restart, a UART baud change, a
+# reacquisition — and those are not measurements of where the antenna is. Centre
+# on the median, scale by the MAD, drop anything beyond 5 sigma, then take the
+# mean of what survives: robust to contamination, but still lower variance than
+# the bare median.
+def _robust(v):
+    srt=sorted(v); n=len(srt)
+    med=srt[n//2] if n%2 else (srt[n//2-1]+srt[n//2])/2
+    dev=sorted(abs(x-med) for x in v)
+    mad=dev[n//2] if n%2 else (dev[n//2-1]+dev[n//2])/2
+    return med, mad*1.4826
+
+mlat0,slat0=_robust(lat); mlon0,slon0=_robust(lon); malt0,salt0=_robust(alt)
+keep=[i for i in range(len(lat))
+      if (slat0==0 or abs(lat[i]-mlat0)<=5*slat0)
+      and (slon0==0 or abs(lon[i]-mlon0)<=5*slon0)
+      and (salt0==0 or abs(alt[i]-malt0)<=5*salt0)]
+rejected=len(lat)-len(keep)
+if len(keep) < 60:
+    print("TOOFEW"); raise SystemExit
+lat=[lat[i] for i in keep]; lon=[lon[i] for i in keep]; alt=[alt[i] for i in keep]
+
+mlat,slat_deg=_robust(lat); mlon,_=_robust(lon); malt,_=_robust(alt)
+sd=slat_deg*111132.0
 # See the note in status: roughly one independent sample per hour, floored at
 # 10 cm. Writing the naive standard error into FIXED_POS_ACC would tell the
 # receiver the position is an order of magnitude better known than it is.
-span_h = float(sys.argv[2])
+import datetime
+if len(stamps) > 1:
+    t0=datetime.datetime.fromisoformat(stamps[0].replace("Z","+00:00"))
+    t1=datetime.datetime.fromisoformat(stamps[-1].replace("Z","+00:00"))
+    span_h=(t1-t0).total_seconds()/3600.0
+else:
+    span_h=float(sys.argv[2])
 se = max(sd/math.sqrt(max(1.0, span_h)), 0.10)
 # CFG-TMODE LAT/LON are 1e-7 deg with a separate _HP field in 1e-9 deg (-99..99).
 def split(d):
@@ -206,16 +265,19 @@ def split(d):
     while hp < -99: base -= 1; hp += 100
     return base, hp
 la,lahp = split(mlat); lo,lohp = split(mlon)
-# HEIGHT is cm, HEIGHT_HP is 0.1 mm (-99..99)
-hcm = round(malt*100); hhp = round((malt*100 - hcm)*1000)
+# HEIGHT is cm, HEIGHT_HP is 0.1 mm with a hard range of -99..99. One cm is 100
+# units of 0.1 mm, so the leftover fraction of a centimetre scales by 100 — not
+# 1000, which overflows the field and the receiver rejects the write outright.
+# Rounding to the nearest cm leaves at most +/-0.5 cm, i.e. +/-50 units.
+hcm = round(malt*100); hhp = round((malt*100 - hcm)*100)
 acc = max(1, round(se*10000))   # FIXED_POS_ACC is 0.1 mm units
-print(f"{la} {lahp} {lo} {lohp} {hcm} {hhp} {acc} {len(lat)} {mlat:.9f} {mlon:.9f} {malt:.3f} {se:.3f}")
+print(f"{la} {lahp} {lo} {lohp} {hcm} {hhp} {acc} {len(lat)} {mlat:.9f} {mlon:.9f} {malt:.3f} {se:.3f} {rejected}")
 PY
 )
 	[ "$out" = "TOOFEW" ] && die "fewer than 60 usable fixes; let it run longer"
-	read -r LA LAHP LO LOHP HCM HHP ACC N MLAT MLON MALT SE <<<"$out"
+	read -r LA LAHP LO LOHP HCM HHP ACC N MLAT MLON MALT SE REJECTED <<<"$out"
 
-	echo "Survey result from $N fixes:"
+	echo "Survey result from $N fixes (${REJECTED:-0} rejected as outliers):"
 	printf '  lat %s  lon %s  height %s m (HAE)\n' "$MLAT" "$MLON" "$MALT"
 	printf '  realistic accuracy %s m  ->  %s ns of time bias\n' "$SE" "$(echo "$SE 3.3" | awk '{printf "%.1f", $1*$2}')"
 	echo
@@ -235,7 +297,10 @@ PY
 	setkey CFG-TMODE-MODE 2 7 && echo "  fixed mode restored with the surveyed position"
 
 	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 0 7 >/dev/null 2>&1
+	# Kill the wrapper first, then any gpspipe it spawned, or the loop respawns.
 	kill "${json_pid:-0}" "${rawx_pid:-0}" 2>/dev/null
+	sleep 1
+	for p in $(pgrep -x gpspipe); do kill "$p" 2>/dev/null; done
 
 	{
 		echo "finished=$(date -Is)"
@@ -257,7 +322,10 @@ cmd_abort() {
 	setkey CFG-TMODE-LAT "$old_CFG_TMODE_LAT" 1 2>/dev/null
 	setkey CFG-TMODE-MODE "${old_CFG_TMODE_MODE:-2}" 1
 	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 0 1
+	# Kill the wrapper first, then any gpspipe it spawned, or the loop respawns.
 	kill "${json_pid:-0}" "${rawx_pid:-0}" 2>/dev/null
+	sleep 1
+	for p in $(pgrep -x gpspipe); do kill "$p" 2>/dev/null; done
 	mv "$META" "$META.aborted-$(date +%s)"
 	echo "aborted; log kept at $LOG"
 }
