@@ -37,7 +37,7 @@
       <div class="card"><div class="label">sky view</div><div class="stat-value"><span id="used">—</span><small> / <span id="seen">—</span></small></div><div class="stat-note">satellites used / visible<br>PDOP <span id="pdop">—</span></div></div>
       <div class="card"><div class="label">reference oscillator</div><div class="stat-value"><span id="rbfreq">—</span> <small>ppb</small></div><div class="stat-note">AR-40A vs GNSS, uncertainty <span id="rbskew">—</span> ppb. The CM4 timebase is the rubidium, so Chrony&rsquo;s frequency estimate measures it directly. Costs <span id="rbholdover">—</span> µs/day of drift if GNSS is lost; <span id="rbturns">—</span> turns of 10 on the mechanical trim would null it.</div></div>
     </section>
-    <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-hours="6">6h</button><button class="active" data-hours="24">24h</button><button data-hours="168">7d</button></div></div>
+    <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-hours="6">6h</button><button class="active" data-hours="24">24h</button><button data-hours="168">7d</button><button id="smooth-btn" title="Rolling median over the chart window. Median rather than mean: spikes are outliers, and a mean smears them across neighbouring samples instead of rejecting them.">raw</button></div></div>
     <section class="charts">
       <div class="card chart"><div class="label">PPS phase & stability · nanoseconds</div><canvas id="timing-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">offset</span><span class="key" style="--key:var(--mint)">1σ scatter</span></div></div>
       <div class="card chart"><div class="label">Satellites</div><canvas id="sat-chart"></canvas><div class="legend"><span class="key" style="--key:var(--mint)">used</span><span class="key" style="--key:var(--muted)">seen</span></div></div>
@@ -56,7 +56,7 @@
 </main>
 <script>
 const $=s=>document.querySelector(s), css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-let payload, hours=24;
+let payload, hours=24, smooth=false;
 const finite=v=>typeof v==='number'&&Number.isFinite(v), fmt=(v,d=0)=>finite(v)?v.toLocaleString(undefined,{maximumFractionDigits:d}):'—';
 function compactNs(v){if(!finite(v))return '—';const a=Math.abs(v);if(a>=1e9)return `${fmt(v/1e9,3)} s`;if(a>=1e6)return `${fmt(v/1e6,3)} ms`;if(a>=1e3)return `${fmt(v/1e3,2)} µs`;return `${fmt(v,1)} ns`}
 function lineChart(canvas, rows, series, symmetric=false){
@@ -68,6 +68,26 @@ function lineChart(canvas, rows, series, symmetric=false){
   for(const s of series){c.strokeStyle=s.color;c.lineWidth=1.8;c.beginPath();let begun=false;for(const r of rows){if(!finite(r[s.key])){begun=false;continue}const xx=x(r.at),yy=y(r[s.key]);if(!begun){c.moveTo(xx,yy);begun=true}else c.lineTo(xx,yy)}c.stroke()}
   c.fillStyle=css('--muted');c.textAlign='left';c.fillText(`${hours}h ago`,p.l,h-6);c.textAlign='right';c.fillText('now',w-p.r,h-6)
 }
+// Rolling median. Spikes here are outliers — a dropped PPS sample, a
+// reacquisition, a momentary constellation change — so a median rejects them
+// outright, where a moving average drags the trend toward each one and smears it
+// across the window. Window is a fraction of the visible span, clamped so short
+// ranges stay responsive and long ones stay readable.
+function medianWindow(n){const w=Math.round(n/32);return Math.max(3,Math.min(31,w%2?w:w+1))}
+function medianRows(rows,keys,win){
+  const half=(win-1)/2;
+  return rows.map((row,i)=>{
+    const out={...row};
+    for(const key of keys){
+      const vals=[];
+      for(let j=Math.max(0,i-half);j<=Math.min(rows.length-1,i+half);j++){
+        const v=rows[j][key];if(finite(v))vals.push(v);
+      }
+      if(vals.length){vals.sort((a,b)=>a-b);out[key]=vals[(vals.length-1)>>1]}
+    }
+    return out;
+  });
+}
 function render(){
   const samples=payload.samples||[],latest=samples.at(-1);if(!latest){$('#empty').style.display='block';return}$('#content').hidden=false;
   const status=$('#status'),age=Date.now()-new Date(latest.at);if(age>15*60e3){status.className='status unavailable';status.lastElementChild.textContent='telemetry stale'}else{status.className=`status ${latest.status}`;status.lastElementChild.textContent=latest.status==='healthy'?'timing chain healthy':latest.status}
@@ -78,9 +98,25 @@ function render(){
   const consts=$('#constellations');consts.replaceChildren();for(const [name,count] of Object.entries(latest.constellations||{})){const el=document.createElement('span');el.className='sat';el.append(name+' ');const b=document.createElement('b');b.textContent=count;el.append(b);consts.append(el)}
   const checks=$('#checks');checks.replaceChildren();for(const item of (latest.checks||[]).filter(x=>x.level!=='ok').slice(0,6)){const row=document.createElement('div');row.className=`check ${item.level}`;const level=document.createElement('span'),copy=document.createElement('span');level.textContent=item.level.toUpperCase();copy.textContent=item.text;row.append(level,copy);checks.append(row)}if(!checks.children.length){checks.innerHTML='<div class="check"><span>OK</span><span>Every monitored link reports healthy.</span></div>'}
   const blocks=latest.rf_blocks||[],rank={ok:0,unknown:1,warning:2,critical:3},worst=blocks.reduce((a,b)=>(rank[b.state]||0)>(rank[a]||0)?b.state:a,'ok'),spoofDanger=(latest.spoof_code||0)>=2,integrity=$('#integrity');integrity.textContent=spoofDanger?'SPOOFING INDICATED':worst==='critical'?'CRITICAL INTERFERENCE':worst==='warning'?'RF WARNING':'NO ALERTS';integrity.className=`integrity ${spoofDanger?'critical':worst}`;$('#spoof').textContent=`Spoof detector: ${(latest.spoof_state||'unavailable').replaceAll('-',' ')}`;const rfList=$('#rf-list');rfList.replaceChildren();for(const b of blocks){const row=document.createElement('div');row.className='rf-row';const name=document.createElement('span'),reading=document.createElement('b');name.textContent=`RF block ${b.id} · ${b.state}`;reading.textContent=`${b.jam_indicator}/255`;row.append(name,reading);rfList.append(row)}
-  const start=Date.now()-hours*3600e3,rows=samples.filter(s=>new Date(s.at)>=start);lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],true);lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);const rbRows=rows.map(s=>({...s,rbppb:finite(s.ref_freq_offset)?s.ref_freq_offset*1e9:undefined}));lineChart($('#rb-chart'),rbRows,[{key:'rbppb',color:css('--amber')}],true);const rfRows=rows.map(s=>({...s,jam0:(s.rf_blocks||[]).find(b=>b.id===0)?.jam_indicator,jam1:(s.rf_blocks||[]).find(b=>b.id===1)?.jam_indicator}));lineChart($('#rf-chart'),rfRows,[{key:'jam0',color:css('--amber')},{key:'jam1',color:css('--cyan')}]);
+  const start=Date.now()-hours*3600e3;
+  const base=samples.filter(s=>new Date(s.at)>=start).map(s=>({...s,
+    jam0:(s.rf_blocks||[]).find(b=>b.id===0)?.jam_indicator,
+    jam1:(s.rf_blocks||[]).find(b=>b.id===1)?.jam_indicator,
+    rbppb:finite(s.ref_freq_offset)?s.ref_freq_offset*1e9:undefined}));
+  const keys=['pps_offset_ns','pps_stddev_ns','sats_seen','sats_used','jam0','jam1','rbppb'];
+  const win=medianWindow(base.length),rows=smooth?medianRows(base,keys,win):base;
+  const btn=$('#smooth-btn');btn.classList.toggle('active',smooth);
+  if(smooth&&base.length>1){
+    const spanMin=(new Date(base.at(-1).at)-new Date(base[0].at))/6e4;
+    const winMin=Math.round(spanMin/(base.length-1)*win);
+    btn.textContent=winMin>=60?`median · ${fmt(winMin/60,1)} h`:`median · ${winMin} min`;
+  }else{btn.textContent=smooth?'median':'raw'}
+  lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],true);
+  lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);
+  lineChart($('#rf-chart'),rows,[{key:'jam0',color:css('--amber')},{key:'jam1',color:css('--cyan')}]);
+  lineChart($('#rb-chart'),rows,[{key:'rbppb',color:css('--amber')}],true);
 }
-document.querySelectorAll('[data-hours]').forEach(b=>b.onclick=()=>{hours=+b.dataset.hours;document.querySelectorAll('[data-hours]').forEach(x=>x.classList.toggle('active',x===b));render()});addEventListener('resize',()=>payload&&render());
+document.querySelectorAll('[data-hours]').forEach(b=>b.onclick=()=>{hours=+b.dataset.hours;document.querySelectorAll('[data-hours]').forEach(x=>x.classList.toggle('active',x===b));render()});$('#smooth-btn').onclick=()=>{smooth=!smooth;render()};addEventListener('resize',()=>payload&&render());
 fetch('data.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(x=>{payload=x;render()}).catch(()=>{$('#status').lastElementChild.textContent='telemetry unavailable';$('#status').classList.add('unavailable');$('#empty').style.display='block'});
 </script>
 </body>
