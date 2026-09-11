@@ -163,6 +163,23 @@ Recorded so these do not get re-opened by accident.
 
 ---
 
+## Dashboard interaction
+
+`dashboard/` collects `gpsstat` every 5 minutes via `/etc/cron.d/aika-clock-dashboard`
+and publishes to <https://www.mui.fi/clock/>. Two consequences for the steps above:
+
+- **The survey window will show as a degraded period in the history.** While TMODE is
+  off the rig is a rover, so PPS jitter and the reported accuracy are worse than the
+  steady state. That is expected, not a fault — it starts 2026-09-11 00:06 and ends at
+  `f9t-survey finish`.
+- **`gpsstat` is now on a schedule, so its exit code matters more than before.** This is
+  why the RTC condition is a `NOTE` rather than a `WARN`: a known, accepted fault must
+  not hold the dashboard at a permanent non-zero verdict, or a real failure stops
+  standing out. Keep that distinction when adding checks — `note()` for accepted
+  conditions, `warn()`/`fail()` only for things that need action.
+
+---
+
 ## Reference — the tools
 
 | Tool | Purpose |
