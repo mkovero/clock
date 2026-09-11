@@ -74,7 +74,13 @@ function lineChart(canvas, rows, series, symmetric=false){
 // outright, where a moving average drags the trend toward each one and smears it
 // across the window. Window is a fraction of the visible span, clamped so short
 // ranges stay responsive and long ones stay readable.
-function medianWindow(n){const w=Math.round(n/32);return Math.max(3,Math.min(31,w%2?w:w+1))}
+// Window has to outlast a run, not just a point. A run of k consecutive outliers
+// survives any window shorter than 2k+1, and real excursions here last several
+// samples — the 2026-09-11 second-numbering incident was three in a row (46000,
+// 1040, 597 ns). Sizing purely by sample count gave a window of 3 on a short
+// history, which removes nothing from a run of 3. Floor it at 7 so even a young
+// archive gets a usable window, and let it grow with the span after that.
+function medianWindow(n){const w=Math.max(7,Math.round(n/16));return Math.min(41,w%2?w:w+1)}
 function medianRows(rows,keys,win){
   const half=(win-1)/2;
   return rows.map((row,i)=>{
