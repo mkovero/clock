@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# f9t-rawlog — log UBX-RXM-RAWX for a PPP solution, without disturbing timing.
+#
+#   f9t-rawlog start [hours]   enable RAWX/SFRBX and start logging
+#   f9t-rawlog status          coverage so far, and the UART margin
+#   f9t-rawlog stop            disable them and stop logging
+#
+# Raw observations are independent of the navigation solution, so unlike a site
+# survey this needs no rover mode: the receiver stays in TMODE fixed and the PPS
+# keeps its full timing performance throughout. Log now, submit to PPP whenever,
+# then write the result in with ubx-apply-config. No second survey.
+#
+# The one real hazard is bandwidth, and it is a *correctness* hazard rather than a
+# latency one. chrony's PPS refclock is locked to the NMEA source to decide which
+# second a pulse belongs to, which needs the NMEA sample inside +/-0.5 s. RAWX
+# adds roughly 800 bytes per epoch. On 2026-09-11 that pushed the serial cycle
+# from ~250 ms to ~919 ms at 38400 baud, chrony numbered a pulse to the wrong
+# second, and the clock went 527 ms off UTC while still reporting stratum 1 and a
+# few-ns offset — the servo was tracking the pulse perfectly, it was simply the
+# wrong pulse.
+#
+# So this measures the margin before enabling, measures it again after, and backs
+# the change out itself if it ate the budget.
+
+set -uo pipefail
+
+STATE="${F9T_RAWLOG_DIR:-$HOME/f9t-rawlog}"
+LOG="$STATE/rawx.ubx"
+META="$STATE/rawlog.meta"
+
+export UBXOPTS="${UBXOPTS:--P 29.00}"
+F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
+
+# Cycle latency beyond which second-numbering has no comfortable margin left.
+WARN_MS=250
+ABORT_MS=400
+
+die() { echo "error: $*" >&2; exit 1; }
+
+getkey() {
+	timeout 20 ubxtool -g "$1,0" "$F9T_TARGET" 2>/dev/null \
+		| grep -oE "item $1/0x[0-9a-f]+ val [-0-9]+" \
+		| grep -oE 'val [-0-9]+' | awk '{print $2}' | head -1
+}
+
+setkey() {
+	timeout 20 ubxtool -z "$1,$2,${3:-1}" "$F9T_TARGET" >/dev/null 2>&1
+	sleep 1
+	local got; got=$(getkey "$1")
+	[ "$got" = "$2" ] || { echo "  WARN $1 wanted $2, reads ${got:-?}" >&2; return 1; }
+	return 0
+}
+
+# NMEA refclock's last sample, in milliseconds. This is the quantity that must
+# stay well inside +/-500 ms; chronyc prints it as e.g. "+53ms" or "+121ms".
+nmea_ms() {
+	chronyc -n sources 2>/dev/null | awk '$2=="NMEA"{print $7}' \
+		| grep -oE '^[+-][0-9.]+(ns|us|ms|s)' \
+		| awk '{
+			v=$0; sub(/^\+/,"",v)
+			if (v ~ /ns$/) { sub(/ns$/,"",v); printf "%.3f", v/1e6 }
+			else if (v ~ /us$/) { sub(/us$/,"",v); printf "%.3f", v/1e3 }
+			else if (v ~ /ms$/) { sub(/ms$/,"",v); printf "%.3f", v }
+			else { sub(/s$/,"",v); printf "%.3f", v*1000 }
+		}' | tr -d '-'
+}
+
+margin_report() {
+	local ms="$1" label="$2"
+	if [ -z "$ms" ]; then
+		echo "  $label: NMEA offset unreadable"
+		return 0
+	fi
+	awk -v m="$ms" -v w="$WARN_MS" -v a="$ABORT_MS" -v l="$label" 'BEGIN{
+		pct = m/500*100
+		printf "  %s: NMEA cycle %.0f ms — %.0f%% of the 500 ms numbering budget\n", l, m, pct
+	}'
+}
+
+cmd_start() {
+	local hours="${1:-24}"
+	mkdir -p "$STATE" || die "cannot create $STATE"
+	[ -f "$META" ] && die "already running; use status or stop"
+
+	[ "$(getkey CFG-TMODE-MODE)" = "2" ] \
+		|| echo "  note: receiver is not in TMODE fixed; RAWX is still valid for PPP"
+
+	local free_mb
+	free_mb=$(df -Pm "$STATE" | awk 'NR==2{print $4}')
+	local need_mb=$(( hours * 13 ))
+	echo "disk: ${free_mb} MB free, about ${need_mb} MB needed for ${hours} h at ~12 MB/h"
+	[ "$free_mb" -lt "$(( need_mb + 500 ))" ] && die "not enough headroom"
+
+	local before; before=$(nmea_ms)
+	margin_report "$before" "before"
+
+	echo "Enabling raw observations (RAM layer — a reboot reverts them):"
+	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 1 1 && echo "  RXM-RAWX on"
+	setkey CFG-MSGOUT-UBX_RXM_SFRBX_UART1 1 1 && echo "  RXM-SFRBX on"
+
+	{
+		echo "started=$(date -Is)"
+		echo "hours=$hours"
+	} >"$META"
+
+	# Resilient by construction: gpspipe is a gpsd client, and anything that
+	# restarts gpsd drops it. A bare logger silently stops and the run collects
+	# nothing while appearing to work.
+	nohup sh -c "while :; do gpspipe -R >>'$LOG' 2>/dev/null; sleep 5; done" >/dev/null 2>&1 &
+	echo "rawx_pid=$!" >>"$META"
+
+	echo "Settling, then re-checking the margin ..."
+	sleep 45
+	local after; after=$(nmea_ms)
+	margin_report "$after" "after "
+
+	if [ -n "$after" ] && awk -v a="$after" -v lim="$ABORT_MS" 'BEGIN{exit !(a>lim)}'; then
+		echo
+		echo "  ABORTING: cycle latency ${after} ms leaves too little numbering margin."
+		cmd_stop
+		die "raw logging backed out; raise UART1 baud before retrying"
+	fi
+	if [ -n "$after" ] && awk -v a="$after" -v lim="$WARN_MS" 'BEGIN{exit !(a>lim)}'; then
+		echo "  WARNING: over ${WARN_MS} ms. Watch chronyc sources for a wrong-second lock."
+	fi
+
+	echo
+	echo "Logging to $LOG for ${hours} h. Check with: f9t-rawlog status"
+	echo "When done: f9t-rawlog stop, then f9t-ppp $LOG"
+}
+
+cmd_status() {
+	[ -f "$META" ] || die "not running"
+	# shellcheck disable=SC1090
+	. "$META"
+	local elapsed
+	elapsed=$(( ( $(date +%s) - $(date -d "$started" +%s) ) / 60 ))
+	printf 'started   %s\n' "$started"
+	printf 'elapsed   %d min of %s h\n' "$elapsed" "$hours"
+	printf 'log       %s\n' "$(du -h "$LOG" 2>/dev/null | cut -f1)"
+	pgrep -x gpspipe >/dev/null && echo "logger    running" || echo "logger    NOT RUNNING"
+	margin_report "$(nmea_ms)" "now   "
+
+	python3 - "$LOG" <<'PY'
+import collections, sys
+try:
+    d = open(sys.argv[1], "rb").read()
+except OSError:
+    raise SystemExit
+c = collections.Counter(); i = 0
+while True:
+    i = d.find(b"\xb5\x62", i)
+    if i < 0 or i + 6 > len(d): break
+    ln = d[i+4] | (d[i+5] << 8)
+    c[(d[i+2], d[i+3])] += 1
+    i += 6 + ln + 2
+rawx = c.get((0x02, 0x15), 0)
+print(f"RXM-RAWX  {rawx} epochs (~{rawx/3600:.1f} h at 1 Hz)")
+print(f"RXM-SFRBX {c.get((0x02,0x13),0)} records")
+if rawx and rawx < 6*3600:
+    print(f"          PPP wants 6 h or more; {(6*3600-rawx)/3600:.1f} h to go")
+PY
+}
+
+cmd_stop() {
+	echo "Disabling raw observations:"
+	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 0 1 && echo "  RXM-RAWX off"
+	setkey CFG-MSGOUT-UBX_RXM_SFRBX_UART1 0 1 && echo "  RXM-SFRBX off"
+	if [ -f "$META" ]; then
+		# shellcheck disable=SC1090
+		. "$META"
+		kill "${rawx_pid:-0}" 2>/dev/null
+		sleep 1
+		for p in $(pgrep -x gpspipe); do kill "$p" 2>/dev/null; done
+		mv "$META" "$META.done-$(date +%s)"
+	fi
+	echo "  logger stopped; log kept at $LOG"
+}
+
+case "${1:-}" in
+	start)  shift; cmd_start "$@" ;;
+	status) cmd_status ;;
+	stop)   cmd_stop ;;
+	*) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

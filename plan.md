@@ -29,6 +29,29 @@ Expect the realistic accuracy figure to settle around **0.4 m ≈ 1.3 ns**. Igno
 
 ---
 
+## Step 1 — DONE 2026-09-11
+
+Finished and verified in Flash:
+
+```
+lat 60.179612200   lon 24.958719200   height 22.138 m HAE
+FIXED_POS_ACC 1.432 m  ->  4.7 ns        ECEF fields cleared
+```
+
+That is 3.6 m north, 1.5 m east and 3.1 m up from the old stored position — the
+antenna move, measured. Timing came back at stratum 1, 16 ns RMS offset, NMEA
+cycle 53 ms. Result saved as `config/survey-2026-09-11.meta`.
+
+It is weaker than planned. The loggers are gpsd clients, and the gpsd restart for
+the baud change dropped them at 03:54, so the run covered 3 h 48 min of its 10 h
+and then held the receiver in rover mode for nine hours collecting nothing. The
+loggers now run in a retry loop. **4.7 ns is comparable to the ~16 ns it replaced,
+not dramatically better** — but it is centred on the truth with a known
+uncertainty rather than confidently pointing where the antenna used to be. PPP in
+Step 2 supersedes it.
+
+<details><summary>Original Step 1 instructions</summary>
+
 ## Step 1 — finish the survey (~10:07)
 
 ```
@@ -54,7 +77,29 @@ position belongs in git.
 
 ---
 
+</details>
+
+---
+
 ## Step 2 — PPP, for the number nothing on the rig can measure
+
+**Raw logging started 2026-09-11 13:29 for 24 h**, so this step is waiting on data
+rather than on a decision.
+
+```
+f9t-rawlog status       # coverage, logger health, UART margin
+f9t-rawlog stop         # when it has run long enough
+f9t-ppp ~/f9t-rawlog/rawx.ubx
+```
+
+Raw observations are independent of the navigation solution, so this needs **no
+rover mode**: the receiver stays in TMODE fixed and the PPS keeps full timing
+performance throughout. That is why this did not have to be part of the survey.
+
+`f9t-rawlog` measures the NMEA cycle latency before and after enabling RAWX and
+backs the change out itself if it eats the second-numbering budget. On this rig at
+115200 it went 53 ms → 106 ms, 21% of the 500 ms budget. At 38400 the same change
+consumed 184% of it, which is what broke the clock on 2026-09-11.
 
 ```
 f9t-ppp                 # RAWX -> RINEX 3.04, gzipped
