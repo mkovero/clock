@@ -114,6 +114,64 @@ Until then: **restart gpsd after any cold boot.** `gpsstat` reports the conditio
 
 ---
 
+## Step 3b — trimming the AR-40A, when it has settled
+
+**Do not do this yet.** Two reasons, both about the measurement rather than the trimmer.
+
+The AR-40A was power-cycled for the rack move on 2026-09-11. Rubidium retrace after a
+power cycle runs 10⁻¹⁰–10⁻⁹ and settles over days, so trimming now risks chasing warm-up.
+And the present measurement uncertainty is 9.6×10⁻¹¹; averaged over a week it falls
+toward 10⁻¹¹–10⁻¹², a hundredth of a turn. The dashboard is archiving the frequency, so
+waiting costs nothing and the number arrives on its own.
+
+**Give it a week undisturbed, then read the trend off the dashboard.**
+
+### The arithmetic
+
+`gpsstat` prints both figures every run, so they stay current:
+
+```
+fractional frequency offset vs GNSS       : -2.5920e-09
+holdover drift if GNSS is lost            : 223.9 us/day
+mechanical trim to null this              : 5.18 turns of 10
+```
+
+From the manual (README §3): the trimmer sits under the calibration sticker, **1 turn ≈
+5×10⁻¹⁰, 10 turns total**, so the full span is 5×10⁻⁹.
+
+At −2.592×10⁻⁹ the correction wanted is **+2.59×10⁻⁹, about 5.2 turns — 52% of the whole
+span, in one direction.**
+
+### The catch
+
+**Where the trimmer currently sits is not recorded anywhere.** If it was left near centre
+at the last calibration there are roughly 5 turns each way, which puts 5.2 turns *right at
+the endstop*. If it happens to be wound the helpful way there is room; the other way,
+there is not.
+
+Establish that by feel before committing to the adjustment, and **count and write down
+the turns** as they go in — that is the record that does not currently exist. Add it to
+`config/` afterwards.
+
+### Is it worth doing at all
+
+GNSS supplies accuracy while it is present, and 2.6×10⁻⁹ is invisible to the Orion (audio
+wants ppm) and to bench instruments. The offset shows up in exactly one place: **holdover**.
+
+| Offset | Drift with GNSS lost |
+|---|---|
+| now, 2.592×10⁻⁹ | 224 µs/day |
+| trimmed to 5×10⁻¹¹ | 4.3 µs/day |
+
+About 50× longer before the rig stops being useful without GNSS. That is the case for
+doing it, and whether it matters depends on whether holdover matters here.
+
+Note this is ordinary aging, not a fault. Spec is <1×10⁻⁹ the first year and <5×10⁻¹⁰/yr
+after, so 2.59×10⁻⁹ implies at least ~4 years and realistically much longer — the unit is
+behaving like an old rubidium that has not been recalibrated, which is what it is.
+
+---
+
 ## Step 4 — smaller items, no particular order
 
 - **NMEA `offset` is wrong by ~0.2 s.** With `offset 0.028` the source reads +201 to

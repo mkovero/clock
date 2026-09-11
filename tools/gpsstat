@@ -311,6 +311,20 @@ fi
 # network source the same figure is real but far too noisy to conclude from.
 if [ -n "${FRAC:-}" ]; then
 	ABSFRAC=$(awk -v f="$FRAC" 'BEGIN{ printf "%.4e", (f < 0 ? -f : f) }')
+
+	# The fractional offset restated as the thing it actually costs. GNSS supplies
+	# accuracy while it is present, and 1e-9 is invisible to the Orion (audio wants
+	# ppm) and to bench instruments, so this offset shows up in exactly one place:
+	# how fast the rig walks away from UTC if GNSS is lost.
+	printf '  holdover drift if GNSS is lost            : %s us/day\n' \
+		"$(awk -v a="$ABSFRAC" 'BEGIN{ printf "%.1f", a * 86400 * 1e6 }')"
+
+	# Mechanical trim is 10 turns over 5e-9 total, i.e. ~5e-10 per turn (README §3).
+	# Printed as turns because that is the unit the adjustment is made in. Whether
+	# the turns are *available* depends on where the trimmer currently sits, which
+	# is not recorded anywhere — see plan.md before opening the case.
+	printf '  mechanical trim to null this              : %s turns of 10\n' \
+		"$(awk -v a="$ABSFRAC" 'BEGIN{ printf "%.2f", a / 5e-10 }')"
 	case "${REFID:-}" in
 		*PPS2*)
 			if awk -v a="$ABSFRAC" 'BEGIN{ exit !(a < 1e-8) }'; then

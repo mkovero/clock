@@ -110,6 +110,18 @@ def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
             sample["ref_freq_skew"] = number(match.group(1))
             continue
 
+        match = re.match(
+            r"^  holdover drift if GNSS is lost\s*:\s*(\S+) us/day$", line)
+        if match:
+            sample["holdover_us_per_day"] = number(match.group(1))
+            continue
+
+        match = re.match(
+            r"^  mechanical trim to null this\s*:\s*(\S+) turns of 10$", line)
+        if match:
+            sample["trim_turns"] = number(match.group(1))
+            continue
+
         match = re.match(r"^  drift file age\s*:\s*(\d+) min$", line)
         if match:
             sample["ref_drift_age_min"] = int(match.group(1))
