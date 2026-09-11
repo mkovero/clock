@@ -69,3 +69,28 @@ CFG-MSGOUT-RTCM_3X_TYPE1097_UART1 0
 CFG-MSGOUT-RTCM_3X_TYPE1127_UART1 0
 CFG-MSGOUT-RTCM_3X_TYPE1230_UART1 0
 CFG-MSGOUT-RTCM_3X_TYPE4072_1_UART1 0
+
+# --- UART1 baud -------------------------------------------------------------
+#
+# Raised 38400 -> 115200 on 2026-09-11, forced rather than chosen.
+#
+# Enabling UBX-RXM-RAWX and RXM-SFRBX for the position survey added roughly
+# 800 bytes per epoch to a link already carrying NAV-PVT, NAV-SAT, NAV-TIMEGPS,
+# NAV-TIMEUTC, NAV-SVIN, MON-HW/HW3 and seven NMEA sentences. The serial cycle
+# went from ~250 ms after the second to ~919 ms.
+#
+# That broke PPS second-numbering. chrony's PPS refclock is locked to the NMEA
+# source to decide *which* second a pulse belongs to, and that needs the NMEA
+# time to land within +/-0.5 s. At 919 ms it did not, so chrony numbered the
+# pulse to the wrong second and steered the system clock about 527 ms away from
+# UTC — while still reporting stratum 1 and a few-ns offset, because the servo
+# was tracking the pulse perfectly. The three MIKES servers all read +527 ms and
+# were outvoted by the preferred PPS source.
+#
+# After the change the cycle lands ~121 ms after the second, the servers agree to
+# well under a millisecond, and the numbering corrected itself without a step.
+#
+# The lesson is that UART bandwidth is a *correctness* constraint here, not a
+# latency nicety: the margin between serial cycle time and 0.5 s is what keeps
+# the clock on the right second. Check it before enabling anything on UART1.
+CFG-UART1-BAUDRATE 115200

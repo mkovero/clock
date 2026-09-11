@@ -252,6 +252,79 @@ if [ -n "${TRACK:-}" ]; then
 	printf '  chrony RMS offset (long-term average)     : %s\n' "${RMS:-?}"
 fi
 
+# ------------------------------------------------------- reference oscillator
+
+head_ "reference oscillator (AR-40A)"
+
+# The CM4's crystal is removed and XIN is fed 54 MHz from the Si5351, which is
+# phase-locked to the AR-40A (PLLA = 10 MHz x 86.4 = 864 MHz, MS4 /16 = 54 MHz;
+# 86 + 2/5 is an exact rational, so the divider chain contributes no frequency
+# error of its own). The BCM2711 arch timer runs off XIN, so the system clock's
+# whole timebase is the rubidium.
+#
+# chrony measures the GNSS PPS against that clock. Its frequency estimate is
+# therefore a direct, continuous measurement of the AR-40A against UTC — not an
+# approximation of one. Free frequency comparator, by accident of topology.
+#
+# What it cannot see: anything below about a day of averaging. At 28 ns of PPS
+# noise the measurement floor is ~5e-8 at 1 s, falling as 1/tau, while the
+# rubidium sits near 1e-11 at 1 s. Every tau where a rubidium is interesting is
+# buried in GNSS noise. Frequency accuracy and aging are what this measures.
+
+# Source precision matters here. `chronyc tracking` prints ppm to three decimals,
+# i.e. 1e-9 in fractional terms, which is coarser than the quantity being
+# measured and makes the skew read as a flat zero. The drift file carries six
+# decimals, so 1e-12, at the cost of being rewritten only periodically — fine for
+# something that moves as slowly as a rubidium's frequency.
+DRIFT=/var/lib/chrony/chrony.drift
+DRIFT_TXT=""
+sudo -n test -r "$DRIFT" 2>/dev/null && DRIFT_TXT=$(sudo -n cat "$DRIFT" 2>/dev/null)
+
+if [ -n "$DRIFT_TXT" ]; then
+	FRAC=$(awk '{ printf "%.4e", $1 * 1e-6 }' <<<"$DRIFT_TXT")
+	SKEWF=$(awk '{ printf "%.2e", $2 * 1e-6 }' <<<"$DRIFT_TXT")
+	DRIFT_AGE=$(( ( $(date +%s) - $(sudo -n stat -c %Y "$DRIFT" 2>/dev/null || echo 0) ) / 60 ))
+
+	printf '  fractional frequency offset vs GNSS       : %s\n' "$FRAC"
+	printf '  frequency uncertainty (chrony skew)       : %s\n' "$SKEWF"
+	printf '  drift file age                            : %s min\n' "$DRIFT_AGE"
+elif [ -n "${TRACK:-}" ]; then
+	# Fallback: "Frequency : 0.003 ppm slow" — magnitude plus a direction word.
+	# Slow means the clock would lose time, i.e. the reference is low in frequency.
+	FREQ_RAW=$(awk -F': *' '/^Frequency/{print $2}' <<<"$TRACK")
+	SKEW_RAW=$(awk -F': *' '/^Skew/{print $2}' <<<"$TRACK")
+	FRAC=$(awk -v s="$FREQ_RAW" 'BEGIN{
+		n = s + 0
+		if (s ~ /slow/) n = -n
+		printf "%.4e", n * 1e-6 }')
+	SKEWF=$(awk -v s="$SKEW_RAW" 'BEGIN{ printf "%.2e", (s + 0) * 1e-6 }')
+
+	printf '  fractional frequency offset vs GNSS       : %s\n' "$FRAC"
+	printf '  frequency uncertainty (chrony skew)       : %s\n' "$SKEWF"
+else
+	FRAC=""
+	warn "no chrony frequency data for the reference oscillator"
+fi
+
+# Judged outside the branches above so the verdict is reached whichever source
+# supplied the number. Only meaningful when GNSS is actually steering: against a
+# network source the same figure is real but far too noisy to conclude from.
+if [ -n "${FRAC:-}" ]; then
+	ABSFRAC=$(awk -v f="$FRAC" 'BEGIN{ printf "%.4e", (f < 0 ? -f : f) }')
+	case "${REFID:-}" in
+		*PPS2*)
+			if awk -v a="$ABSFRAC" 'BEGIN{ exit !(a < 1e-8) }'; then
+				ok "reference within 1e-8 of GNSS"
+			elif awk -v a="$ABSFRAC" 'BEGIN{ exit !(a < 1e-7) }'; then
+				note "offset above 1e-8 — aged, untrimmed, or still settling"
+			else
+				warn "offset above 1e-7 — check the AR-40A has lock"
+			fi
+			;;
+		*)  note "not disciplined by GNSS; frequency figure is not meaningful" ;;
+	esac
+fi
+
 # ---------------------------------------------------------------- hardware
 
 head_ "hardware / boot"

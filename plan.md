@@ -121,10 +121,14 @@ Until then: **restart gpsd after any cold boot.** `gpsstat` reports the conditio
   ±0.5 s) but it spends half the ambiguity budget. Correct to ≈0.24 — **determine the
   sign empirically**, chrony's display convention is easy to invert — and do it
   deliberately, since it costs a chronyd restart.
-- **UART1 at 38400 is the latency.** The serial cycle lands ~250 ms after the second.
-  115200 would cut it to ~85 ms. Now less urgent: the seven RTCM3 base-station message
-  types were switched off on 2026-09-10, which removed a large part of the load. Do this
-  before adding any further constellations.
+- ~~**UART1 at 38400 is the latency.**~~ **Done 2026-09-11, forced.** Enabling RAWX and
+  SFRBX for the survey pushed the serial cycle from ~250 ms to ~919 ms, past the ±0.5 s
+  that PPS second-numbering needs. chrony numbered the pulse to the wrong second and put
+  the clock ~527 ms off UTC while still reporting stratum 1 — the servo was tracking the
+  pulse perfectly, it was simply the wrong pulse. Raised to 115200; cycle now ~121 ms and
+  the MIKES servers agree to under a millisecond. **Treat UART bandwidth as a correctness
+  constraint, not a latency nicety**, and check the margin before enabling anything else
+  on UART1.
 - **Build the connectors:** 75 Ω terminator, 50 Ω terminator, BNC tee. Still the only
   thing gating the DA/Orion measurement, which now needs the scope carried to the rack.
 - **DA output into a real 75 Ω load, and Orion's actual termination** — one procedure,

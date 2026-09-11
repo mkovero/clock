@@ -94,6 +94,27 @@ def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
             sample["pps_stddev_ns"] = quantity_ns(match.group(2))
             continue
 
+        # Reference oscillator. The CM4's timebase is the AR-40A via the Si5351,
+        # so chrony's frequency estimate is a direct measurement of the rubidium
+        # against UTC. Tracked here because aging only shows over weeks, and
+        # chrony's own logs rotate away long before that.
+        match = re.match(
+            r"^  fractional frequency offset vs GNSS\s*:\s*(\S+)$", line)
+        if match:
+            sample["ref_freq_offset"] = number(match.group(1))
+            continue
+
+        match = re.match(
+            r"^  frequency uncertainty \(chrony skew\)\s*:\s*(\S+)$", line)
+        if match:
+            sample["ref_freq_skew"] = number(match.group(1))
+            continue
+
+        match = re.match(r"^  drift file age\s*:\s*(\d+) min$", line)
+        if match:
+            sample["ref_drift_age_min"] = int(match.group(1))
+            continue
+
         match = re.match(r"^  system clock max error .*:\s*(.*?)\s*$", line)
         if match:
             sample["max_error_ns"] = quantity_ns(match.group(1))
