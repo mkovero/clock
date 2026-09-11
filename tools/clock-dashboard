@@ -259,7 +259,7 @@ def public_history(samples: list[dict], now: datetime) -> list[dict]:
     chart_keys = (
         "at", "status", "pps_offset_ns", "pps_stddev_ns", "receiver_tacc_ns",
         "max_error_ns", "sats_used", "sats_seen", "rf_blocks", "spoof_state",
-        "spoof_code", "mode",
+        "spoof_code", "ref_freq_offset", "ref_freq_skew", "mode",
     )
     recent_cutoff = now - timedelta(hours=24)
     selected: dict[int, dict] = {}
