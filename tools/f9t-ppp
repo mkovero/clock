@@ -30,6 +30,12 @@ set -uo pipefail
 
 LOG="${1:-$HOME/f9t-survey/rawx.ubx}"
 OUT="${2:-$HOME/f9t-survey/rinex}"
+# Sampling interval for the output. 1 Hz is what the receiver logs and is far more
+# than a static solution needs: 30 s is the IGS standard rate, the accuracy of a
+# multi-hour static occupation is carried by the carrier phase rather than by
+# sample count, and it shrinks the upload by about thirty times. Pass 1 to keep
+# every epoch.
+INTERVAL="${3:-30}"
 
 [ -r "$LOG" ] || { echo "no such log: $LOG" >&2; exit 2; }
 command -v convbin >/dev/null || { echo "convbin missing: apt install rtklib" >&2; exit 2; }
@@ -66,7 +72,7 @@ PY
 [ $? -eq 0 ] || exit 1
 
 echo
-echo "converting to RINEX 3.04 ..."
+echo "converting to RINEX 3.04 at ${INTERVAL} s sampling ..."
 # -r ubx      input format
 # -v 3.04     RINEX version; CSRS-PPP accepts 2.11 and 3.x
 # -od -os     include Doppler and signal strength
@@ -76,7 +82,7 @@ echo "converting to RINEX 3.04 ..."
 # lines that say what it produced and drop the rest.
 # -hm sets MARKER NAME, which convbin otherwise leaves blank; PPP services show
 # it on the report and it is the only label tying a solution back to this rig.
-convbin "$LOG" -r ubx -v 3.04 -f 2 -od -os -hm aika \
+convbin "$LOG" -r ubx -v 3.04 -f 2 -od -os -hm aika -ti "$INTERVAL" \
 	-o "$BASE.obs" -n "$BASE.nav" 2>&1 \
 	| tr '\r' '\n' \
 	| grep -avE '^\s*(scanning|reading)' \
