@@ -1,0 +1,6 @@
+# Date-gated reminders surfaced by gpsstat, and so by the dashboard.
+# Format: YYYY-MM-DD|message   (shown from that date onward)
+
+2026-09-15|Resubmit ~/ppp/aika-20260912-0942.obs.gz to CSRS-PPP. Rapid products are out by now, so Galileo is included and ambiguity resolution should fix (it was IAR 0.00% on ultra-rapid).
+2026-09-30|Resubmit the same file once more against FINAL products for the last increment, then update CFG-TMODE via config/f9t-ppp-position.txt.
+2026-09-18|AR-40A should have finished retracing from the 2026-09-11 power cycle. Read the settled frequency off the dashboard before trimming; see plan.md Step 3b for the turns arithmetic.

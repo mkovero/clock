@@ -117,7 +117,13 @@ fi
 
 head_ "GNSS fix"
 
-if timeout 8 gpspipe -w -n 40 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.json" ]; then
+# Collect for a fixed time, not a fixed message count. "-n 40" inside an 8 s
+# timeout was right at the edge: the stream yields roughly 5-7 JSON objects a
+# second, so 40 of them needs 6-8 s, and any slight slowdown — another gpsstat
+# running from cron at the same moment — returned nothing and reported "GNSS
+# timing is down" on a rig sitting at 9 ns RMS. A monitor that cries failure at a
+# healthy system trains you to ignore it.
+if timeout 15 gpspipe -w -x 9 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.json" ]; then
 	TPV=$(jq -c 'select(.class=="TPV")' <"$TMP/gps.json" 2>/dev/null | tail -1)
 	SKY=$(jq -c 'select(.class=="SKY" and .uSat != null)' <"$TMP/gps.json" 2>/dev/null | tail -1)
 
@@ -337,6 +343,31 @@ if [ -n "${FRAC:-}" ]; then
 			;;
 		*)  note "not disciplined by GNSS; frequency figure is not meaningful" ;;
 	esac
+fi
+
+# --------------------------------------------------------------- reminders
+
+# Date-gated notes. They live here because gpsstat already runs every five
+# minutes from cron and feeds the dashboard, so whatever it prints gets seen —
+# which is more reliable than anyone remembering. NOTE level deliberately: a
+# reminder must never push the exit code non-zero, or a real failure stops
+# standing out.
+#
+# Format, one per line:  YYYY-MM-DD|message
+REMINDERS="${F9T_REMINDERS:-$HOME/.config/f9t-reminders}"
+if [ -r "$REMINDERS" ]; then
+	today=$(date +%Y-%m-%d)
+	shown=0
+	while IFS="|" read -r due msg; do
+		case "$due" in ""|\#*) continue ;; esac
+		[ -z "${msg:-}" ] && continue
+		# due <= today, as string comparison, which ISO dates make valid
+		if [ ! "$due" \> "$today" ]; then
+			[ "$shown" = "0" ] && head_ "reminders"
+			shown=1
+			note "due $due: $msg"
+		fi
+	done <"$REMINDERS"
 fi
 
 # ---------------------------------------------------------------- hardware

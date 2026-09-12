@@ -96,8 +96,26 @@ That is 2.22 m from the 2026-09-11 standalone survey, which had claimed 1.43 m �
 so 1.6 sigma out, meaning the survey's own uncertainty estimate was honest if
 slightly optimistic. Position-induced bias improves from roughly 4.7 ns to 1.35 ns.
 
-**Resubmit the same file in about two weeks.** The solution is decimetre rather
-than centimetre only because of what was available a day after observing:
+**Resubmit the same file — but sooner than two weeks.** That figure was the
+*final*-product latency, and it is the wrong advice for the first resubmit. The
+submission went in two hours after the observation ended, so only the lowest
+product tier existed:
+
+| Product | Latency | What it buys |
+|---|---|---|
+| ultra-rapid | real-time / 6 h | what this run got: no Galileo, IAR failed |
+| **rapid** | **~1-2 days** | Galileo included, far better orbits and clocks, IAR should fix |
+| final | ~12-18 days | the last increment, fully reprocessed |
+
+The error was specific — *no **ultra-rapid** Galileo products* — so rapid and final
+both carry Galileo. Most of the gain is available within a couple of days; final
+products are worth one more pass afterwards if the last increment matters.
+
+Reminders for both are in `config/f9t-reminders` and surface through `gpsstat` on
+the dashboard, so they do not depend on anyone remembering.
+
+The solution is decimetre rather than centimetre only because of what was
+available a day after observing:
 
 ```
 IAR GPS 0.00%        ambiguity resolution failed; float solution only
