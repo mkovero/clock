@@ -1,0 +1,34 @@
+# ZED-F9T fixed position from PPP — 2026-09-12
+#
+# Source: NRCan CSRS-PPP 5.15.5, static, ITRF20 (IGc20), GRS80 ellipsoid.
+# Input: 23.2 h of UBX-RXM-RAWX logged 2026-09-11 10:30 to 2026-09-12 09:42 GPS,
+# decimated to 30 s, 2784 epochs with no gaps.
+#
+#   lat 60.179598272   lon 24.958742464   height 21.2083 m ellipsoidal
+#   sigma 0.212 / 0.168 / 0.309 m (1 sigma) -> 0.41 m 3D -> 1.35 ns
+#
+# This replaces the 2026-09-11 standalone survey, which sat 2.22 m away — 1.6
+# sigma against its own claimed 1.43 m, so that estimate was honest if slightly
+# optimistic.
+#
+# Height is ellipsoidal, not orthometric. CGVD2013 was reported OUTSIDE_GRID_LIMIT
+# anyway, this being Finland, so there is no geoid height to confuse it with here.
+#
+# The solution is decimetre rather than centimetre for four reasons, all fixable
+# by resubmitting the same file in about two weeks:
+#   IAR GPS 0.00%   ambiguity resolution failed; float solution only
+#   Galileo dropped; no ultra-rapid Galileo products exist
+#   ultra-rapid orbits and clocks (EMR1DCBULT), the least accurate tier
+#   ANT NOT FOUND; no antenna phase-centre model applied
+#
+# That last one matters less than it sounds. A timing receiver in TMODE fixed
+# computes ranges to the antenna phase centre, so the uncorrected APC position is
+# the self-consistent choice here, not a defect.
+
+CFG-TMODE-LAT            601795982
+CFG-TMODE-LAT_HP         72
+CFG-TMODE-LON            249587424
+CFG-TMODE-LON_HP         64
+CFG-TMODE-HEIGHT         2121
+CFG-TMODE-HEIGHT_HP      -17
+CFG-TMODE-FIXED_POS_ACC  4103

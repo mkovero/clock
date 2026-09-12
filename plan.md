@@ -81,10 +81,48 @@ position belongs in git.
 
 ---
 
-## Step 2 — PPP, for the number nothing on the rig can measure
+## Step 2 — DONE 2026-09-12, and worth resubmitting
 
-**Raw logging started 2026-09-11 13:29 for 24 h**, so this step is waiting on data
-rather than on a decision.
+23.2 h of RAWX, 2784 epochs at 30 s with no gaps, through NRCan CSRS-PPP. Written
+to Flash and verified; report kept as `config/ppp-2026-09-12.sum`, keys as
+`config/f9t-ppp-position.txt`.
+
+```
+lat 60.179598272   lon 24.958742464   hgt 21.2083 m ellipsoidal (ITRF20)
+sigma 0.41 m 3D (1 sigma)  ->  1.35 ns        FIXED_POS_ACC 4103
+```
+
+That is 2.22 m from the 2026-09-11 standalone survey, which had claimed 1.43 m —
+so 1.6 sigma out, meaning the survey's own uncertainty estimate was honest if
+slightly optimistic. Position-induced bias improves from roughly 4.7 ns to 1.35 ns.
+
+**Resubmit the same file in about two weeks.** The solution is decimetre rather
+than centimetre only because of what was available a day after observing:
+
+```
+IAR GPS 0.00%        ambiguity resolution failed; float solution only
+Galileo dropped      no ultra-rapid Galileo products exist
+EMR1DCBULT           ultra-rapid orbits and clocks, the least accurate tier
+ANT NOT FOUND        no antenna phase-centre model
+```
+
+Final products fix the first three, and the file is already on hand at
+`~/ppp/aika-20260912-0942.obs.gz`. The fourth matters less than it reads: a timing
+receiver in TMODE fixed computes ranges to the antenna phase centre, so an
+uncorrected APC position is the self-consistent choice here.
+
+**Correction to an earlier claim in this plan: PPP does not yield the absolute PPS
+bias.** The clock output is the receiver's own free-running TCXO — `OFF
+11109181 ns`, `DRI 39694531 ns/day`, which is 0.46 ppm and textbook for a TCXO.
+PPP solves the receiver clock from pseudoranges, while the F9T corrects TP2
+against its own solution, so the antenna and receiver delays do not fall out of
+it. Measuring those needs a calibrated counter against a second reference, or
+common-view against a laboratory. The antenna LNA and receiver delays therefore
+remain uncompensated inside `CFG-TP-ANT_CABLEDELAY=40`, and remain unmeasured.
+
+<details><summary>Original Step 2 instructions</summary>
+
+## Step 2 — PPP, for the number nothing on the rig can measure
 
 ```
 f9t-rawlog status       # coverage, logger health, UART margin
@@ -406,3 +444,5 @@ verdict
 
 Exit code 0. The RTC line stays a `NOTE` rather than a `WARN` deliberately — known and
 accepted, so it does not mask conditions that are actually news.
+
+</details>
