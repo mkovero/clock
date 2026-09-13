@@ -21,6 +21,11 @@ one-year cutoff, the collector rewrites the archive at most daily to remove them
 does not rewrite the eventual 186 MB file every five minutes. Public output is filtered
 to exactly one year even during the private archive's one-day pruning slack.
 
+The page offers live windows from 30 minutes through one year. Its custom `from` and
+`to` inputs use the browser's local time; applying them creates fixed ISO timestamps in
+the URL so the view can be bookmarked or shared. Selecting any preset returns to a
+window ending at the current time, and `latest 24h` resets the custom form directly.
+
 The collector does not read Chrony's log directory. `gpsstat` is the canonical view of
 this particular rig because it checks the whole path—Chrony, gpsd SHM, the GNSS fix,
 receiver accuracy, and the PPS hardware—instead of assuming that a tracking log means
