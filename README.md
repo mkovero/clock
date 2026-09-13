@@ -1228,11 +1228,12 @@ for things that are actually news.
 
 `tools/clock-dashboard` runs `gpsstat`, parses its stable machine-relevant values, and
 keeps a compact rolling JSON-lines history. It atomically generates `data.json` for the
-self-contained dashboard in `dashboard/index.html`. The page plots PPS phase/scatter and
-satellite usage, shows survey/fixed operating mode, the receiver time-accuracy estimate,
-F9T jamming/spoof indicators, and every non-OK chain check. It visibly marks telemetry
-stale if collection stops for 15 minutes. It uses no build system or external CDN, so
-aika can generate it offline and publish the two static files with cron and SFTP.
+self-contained dashboard in `dashboard/index.html`. The page plots PPS phase/scatter,
+receiver time-accuracy, reference-oscillator frequency, MIKES network comparison, and
+satellite usage; it also shows survey/fixed operating mode, F9T jamming/spoof indicators,
+and every non-OK chain check. It visibly marks telemetry stale if collection stops for
+15 minutes. It uses no build system or external CDN, so aika can generate it offline and
+publish the two static files with cron and SFTP.
 Installation and the live deployment are documented in `dashboard/README.md`.
 
 The page deliberately does not call servo offset "absolute accuracy". Constant antenna,
