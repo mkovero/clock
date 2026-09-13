@@ -37,6 +37,17 @@ VERBOSE=0
 # "No path specified in DEVICE, but multiple devices are attached."
 F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
 
+# Site baseline for the MON-RF CW interference indicator, as "block:value" pairs.
+# In central Helsinki block 0 (L1/E1/B1) reads a steady 57-63 at every hour of
+# the day, AGC unchanged, and the receiver classifies that as WARNING. Three days
+# of dashboard history (2026-09-10..13) showed no daily pattern, with C/N0,
+# satellites used and tAcc all healthy throughout. That is the site's RF floor,
+# not an event: reported as a NOTE, and only a departure from it is a WARN.
+# Whether it is city background or a spur from the rig's own clocks is still
+# open — a UBX-MON-SPAN capture would tell.
+F9T_RF_BASELINE="${F9T_RF_BASELINE:-0:60 1:7}"
+F9T_RF_TOLERANCE="${F9T_RF_TOLERANCE:-15}"
+
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
@@ -173,16 +184,25 @@ if timeout 15 gpspipe -w -x 9 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.jso
 		*) fail "no fix (mode $MODE)" ;;
 	esac
 
-	[ "${USAT:-0}" -ge 6 ] || warn "only ${USAT} satellites used — check antenna siting/sky view"
+	# With GPS, Galileo and BeiDou this rig uses 17-35 satellites (history to
+	# 2026-09-13). Falling under 12 while the fix holds is what partial jamming or a
+	# newly blocked sky looks like, well before the fix itself is lost.
+	if [ "${USAT:-0}" -lt 6 ]; then
+		warn "only ${USAT} satellites used — check antenna siting/sky view"
+	elif [ "$USAT" -lt 12 ]; then
+		warn "only ${USAT} satellites used, normally 17+ — interference or blocked sky"
+	fi
 
-	# Carrier-to-noise of the satellites actually in the solution. A good rooftop
-	# antenna gives several above 40 dB-Hz; an indoor one struggles past 30.
+	# Carrier-to-noise of the satellites actually in the solution. Peak here is
+	# 43-48 dB-Hz. Jamming raises the noise floor, so it shows as this falling long
+	# before the fix goes: the threshold sits just under the healthy range rather
+	# than down at indoor-antenna levels.
 	if [ -n "${SKY:-}" ]; then
 		CN0=$(jq -r '[.satellites[]? | select(.used==true) | .ss] | sort | reverse | .[0:4] | map(tostring) | join(" ")' <<<"$SKY" 2>/dev/null)
 		BEST=$(jq -r '[.satellites[]? | select(.used==true) | .ss] | max // 0' <<<"$SKY" 2>/dev/null)
 		printf '  best C/N0 (used): %s dB-Hz\n' "${CN0:-?}"
-		awk -v b="${BEST:-0}" 'BEGIN{exit !(b>=35)}' && ok "signal level healthy" \
-			|| warn "peak C/N0 ${BEST} dB-Hz is low — antenna placement"
+		awk -v b="${BEST:-0}" 'BEGIN{exit !(b>=40)}' && ok "signal level healthy" \
+			|| warn "peak C/N0 ${BEST} dB-Hz is low — jamming, or antenna/cable fault"
 	fi
 else
 	fail "gpsd returned no data on the socket"
@@ -195,6 +215,9 @@ head_ "GNSS interference"
 # MON-RF is polled read-only. Each RF block has a receiver-classified jamming
 # state plus the raw 0..255 continuous-wave interference indicator. Keep both:
 # the state is immediately useful, while the raw value makes trends visible.
+# The receiver's state alone is not judged where a site baseline exists: block 1
+# also flips to WARNING at indicator 5-9, so the state is a coarse hint, and
+# block 0 sits at WARNING permanently here (see F9T_RF_BASELINE).
 RF_RAW=$(UBXOPTS="-P 29.00" timeout 8 ubxtool -p MON-RF "$F9T_TARGET" 2>/dev/null)
 RF_BLOCKS=0
 RF_ID=''; RF_FLAGS=''
@@ -210,11 +233,25 @@ while IFS= read -r line; do
 		esac
 		printf '  RF block %s | jamming %s | indicator %s/255 | AGC %s | noise %s\n' \
 			"$RF_ID" "$JNAME" "$JAM" "$AGC" "$NOISE"
-		case "$JSTATE" in
-			0) warn "RF block $RF_ID jamming monitor unavailable" ;;
-			2) warn "RF block $RF_ID receiver jamming state is WARNING" ;;
-			3) fail "RF block $RF_ID receiver jamming state is CRITICAL" ;;
-		esac
+		BASE=''
+		for pair in $F9T_RF_BASELINE; do
+			[ "${pair%%:*}" = "$RF_ID" ] && BASE=${pair#*:}
+		done
+		DEV=''
+		[ -n "$BASE" ] && DEV=$(( JAM > BASE ? JAM - BASE : BASE - JAM ))
+		if [ "$JSTATE" = 3 ]; then
+			fail "RF block $RF_ID receiver jamming state is CRITICAL"
+		elif [ "$JSTATE" = 0 ]; then
+			warn "RF block $RF_ID jamming monitor unavailable"
+		elif [ -n "$DEV" ] && [ "$DEV" -gt "$F9T_RF_TOLERANCE" ]; then
+			warn "RF block $RF_ID indicator $JAM/255 departs from site baseline $BASE±$F9T_RF_TOLERANCE (state $JNAME)"
+		elif [ "$JSTATE" = 2 ]; then
+			if [ -n "$BASE" ]; then
+				note "RF block $RF_ID state WARNING at indicator $JAM/255, within site baseline $BASE±$F9T_RF_TOLERANCE"
+			else
+				warn "RF block $RF_ID receiver jamming state is WARNING"
+			fi
+		fi
 		RF_BLOCKS=$((RF_BLOCKS + 1)); RF_ID=''; RF_FLAGS=''
 	fi
 done <<<"$RF_RAW"
@@ -294,6 +331,19 @@ head_ "reference oscillator (AR-40A)"
 # measured and makes the skew read as a flat zero. The drift file carries six
 # decimals, so 1e-12, at the cost of being rewritten only periodically — fine for
 # something that moves as slowly as a rubidium's frequency.
+
+# Live figure from `tracking`: "Frequency : 0.003 ppm slow" — magnitude plus a
+# direction word. Slow means the clock would lose time, i.e. the reference is low
+# in frequency. Used below as the fallback, and by the integrity check.
+LIVE_FRAC=""
+FREQ_RAW=$(awk -F': *' '/^Frequency/{print $2}' <<<"${TRACK:-}")
+if [ -n "$FREQ_RAW" ]; then
+	LIVE_FRAC=$(awk -v s="$FREQ_RAW" 'BEGIN{
+		n = s + 0
+		if (s ~ /slow/) n = -n
+		printf "%.4e", n * 1e-6 }')
+fi
+
 DRIFT=/var/lib/chrony/chrony.drift
 DRIFT_TXT=""
 sudo -n test -r "$DRIFT" 2>/dev/null && DRIFT_TXT=$(sudo -n cat "$DRIFT" 2>/dev/null)
@@ -306,15 +356,9 @@ if [ -n "$DRIFT_TXT" ]; then
 	printf '  fractional frequency offset vs GNSS       : %s\n' "$FRAC"
 	printf '  frequency uncertainty (chrony skew)       : %s\n' "$SKEWF"
 	printf '  drift file age                            : %s min\n' "$DRIFT_AGE"
-elif [ -n "${TRACK:-}" ]; then
-	# Fallback: "Frequency : 0.003 ppm slow" — magnitude plus a direction word.
-	# Slow means the clock would lose time, i.e. the reference is low in frequency.
-	FREQ_RAW=$(awk -F': *' '/^Frequency/{print $2}' <<<"$TRACK")
+elif [ -n "$LIVE_FRAC" ]; then
 	SKEW_RAW=$(awk -F': *' '/^Skew/{print $2}' <<<"$TRACK")
-	FRAC=$(awk -v s="$FREQ_RAW" 'BEGIN{
-		n = s + 0
-		if (s ~ /slow/) n = -n
-		printf "%.4e", n * 1e-6 }')
+	FRAC=$LIVE_FRAC
 	SKEWF=$(awk -v s="$SKEW_RAW" 'BEGIN{ printf "%.2e", (s + 0) * 1e-6 }')
 
 	printf '  fractional frequency offset vs GNSS       : %s\n' "$FRAC"
@@ -356,6 +400,49 @@ if [ -n "${FRAC:-}" ]; then
 		*)  note "not disciplined by GNSS; frequency figure is not meaningful" ;;
 	esac
 fi
+
+# ------------------------------------------------------- GNSS vs the rubidium
+
+# The receiver's spoof flag is weak. The AR-40A is not: a spoofer can move GNSS
+# time but not the rubidium the system clock runs from, so whatever it does has to
+# show up in chrony — first as a phase step on PPS2, then, once chrony follows, as
+# a clock frequency that no longer matches the rubidium's.
+#
+# Frequency uses the live `tracking` figure, not the drift file, which is
+# rewritten only periodically and would report a pull long after it started. The
+# rubidium sits within ~3e-9 of GNSS (history to 2026-09-13), so past 2e-8
+# (1.7 ms/day) it is GNSS that is moving: spoofing, or a receiver fault. The
+# phase limit is 1 us against a PPS2 offset that runs 20-40 ns. A slow walk under
+# both limits is not caught here; the MIKES comparison and the long-term
+# frequency history are what would show that.
+case "${REFID:-}" in
+	*PPS2*)
+		head_ "GNSS integrity vs rubidium"
+		if [ -n "$LIVE_FRAC" ]; then
+			printf '  live frequency offset vs GNSS             : %s\n' "$LIVE_FRAC"
+			if awk -v f="$LIVE_FRAC" 'BEGIN{ exit !((f < 0 ? -f : f) > 2e-8) }'; then
+				warn "clock frequency $LIVE_FRAC is far off the rubidium's — GNSS time is being pulled"
+			else
+				ok "GNSS frequency agrees with the rubidium"
+			fi
+		else
+			warn "no live chrony frequency to compare GNSS against the rubidium"
+		fi
+
+		PPS_NS=$(awk -v s="${STATS%% *}" 'BEGIN{
+			u = s; sub(/^[-+0-9.]+/, "", u)
+			m = (u == "ns") ? 1 : (u == "us") ? 1e3 : (u == "ms") ? 1e6 : (u == "s") ? 1e9 : 0
+			if (!m) exit 1
+			printf "%.0f", s * m }')
+		if [ -n "$PPS_NS" ]; then
+			if [ "${PPS_NS#-}" -gt 1000 ]; then
+				warn "PPS2 offset ${STATS%% *} from the rubidium-held clock — GNSS time stepped"
+			else
+				ok "PPS2 phase consistent with the rubidium-held clock"
+			fi
+		fi
+		;;
+esac
 
 # --------------------------------------------------------------- reminders
 

@@ -72,6 +72,16 @@ detector indicated; “none indicated” is not proof that every received signal
 authentic. The history is useful for correlating changes with C/N0, satellite count,
 position, and timing behavior.
 
+`gpsstat` does not take the receiver's jamming state at face value. At this site RF
+block 0 reads a steady indicator of about 60 and a permanent WARNING, so it is judged
+against a per-block baseline (`F9T_RF_BASELINE`, default `0:60 1:7`, tolerance
+`F9T_RF_TOLERANCE=15`): within it is a NOTE, a departure in either direction is a WARN,
+and CRITICAL is still a FAIL. The panel above still shows the receiver's raw state. The
+stronger spoofing check is the rubidium: with PPS2 selected, `gpsstat` warns when
+chrony's live clock frequency is more than 2e-8 from GNSS or the PPS2 offset exceeds
+1 µs, since the AR-40A cannot be moved by a spoofer. The live frequency is archived as
+`ref_freq_live`.
+
 The MIKES comparison plots Chrony's adjusted offset for each of the three configured
 national time-service servers. Positive means the local clock is ahead of the server;
 the displayed `±` value is the NTP root distance. Network delay and sample noise make

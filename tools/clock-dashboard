@@ -111,6 +111,11 @@ def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
         # so chrony's frequency estimate is a direct measurement of the rubidium
         # against UTC. Tracked here because aging only shows over weeks, and
         # chrony's own logs rotate away long before that.
+        match = re.match(r"^  live frequency offset vs GNSS\s*:\s*(\S+)$", line)
+        if match:
+            sample["ref_freq_live"] = number(match.group(1))
+            continue
+
         match = re.match(
             r"^  fractional frequency offset vs GNSS\s*:\s*(\S+)$", line)
         if match:
