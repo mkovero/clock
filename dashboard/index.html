@@ -41,8 +41,8 @@
     <section class="charts">
       <div class="card chart"><div class="label">PPS phase & stability · nanoseconds</div><canvas id="timing-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">offset</span><span class="key" style="--key:var(--mint)">1σ scatter</span></div></div>
       <div class="card chart"><div class="label">Satellites</div><canvas id="sat-chart"></canvas><div class="legend"><span class="key" style="--key:var(--mint)">used</span><span class="key" style="--key:var(--muted)">seen</span></div></div>
-      <div class="card chart"><div class="label">Reference oscillator frequency · parts per billion</div><canvas id="rb-chart"></canvas><div class="legend"><span class="key" style="--key:var(--amber)">AR-40A vs GNSS</span></div></div>
-      <div class="card chart"><div class="label">Receiver time-solution estimate · nanoseconds</div><canvas id="receiver-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">NAV-TIMEGPS tAcc</span></div><p class="stat-note">The receiver&rsquo;s own uncertainty estimate, not measured absolute error.</p></div>
+      <div class="card chart"><div class="label">Reference oscillator frequency · parts per billion</div><canvas id="rb-chart"></canvas><div class="legend"><span class="key" style="--key:var(--amber)">AR-40A vs GNSS</span></div><p class="stat-note">Scale follows the observed range to make slow frequency drift visible.</p></div>
+      <div class="card chart"><div class="label">Receiver time-solution estimate · nanoseconds</div><canvas id="receiver-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">NAV-TIMEGPS tAcc samples</span></div><p class="stat-note">Discrete receiver-reported integer values, not measured absolute error.</p></div>
       <div class="card chart chart-wide"><div class="label">MIKES network comparison · microseconds</div><canvas id="mikes-chart"></canvas><div id="mikes-legend" class="legend"></div><p class="stat-note">Local clock minus each server; ± is Chrony&rsquo;s NTP root distance. This is a millisecond-scale network cross-check, not a nanosecond calibration.</p></div>
     </section>
     <section class="lower">
@@ -62,13 +62,13 @@ let payload, hours=24, smooth=false;
 try{smooth=localStorage.getItem('clock-smooth')==='1'}catch{}
 const finite=v=>typeof v==='number'&&Number.isFinite(v), fmt=(v,d=0)=>finite(v)?v.toLocaleString(undefined,{maximumFractionDigits:d}):'—';
 function compactNs(v){if(!finite(v))return '—';const a=Math.abs(v);if(a>=1e9)return `${fmt(v/1e9,3)} s`;if(a>=1e6)return `${fmt(v/1e6,3)} ms`;if(a>=1e3)return `${fmt(v/1e3,2)} µs`;return `${fmt(v,1)} ns`}
-function lineChart(canvas, rows, series, symmetric=false){
+function lineChart(canvas, rows, series, scale='zero'){
   const dpr=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);const p={l:48,r:10,t:12,b:28},iw=w-p.l,ih=h-p.t-p.b;
   const values=rows.flatMap(r=>series.map(s=>r[s.key])).filter(finite);if(!values.length){c.fillStyle=css('--muted');c.fillText('Awaiting samples',p.l,p.t+20);return}
-  let lo=Math.min(...values),hi=Math.max(...values);if(symmetric){hi=Math.max(Math.abs(lo),Math.abs(hi),1);lo=-hi}else{lo=Math.min(0,lo);hi=Math.max(hi,1)}if(lo===hi)hi=lo+1;
-  c.font='11px ui-monospace,monospace';c.lineWidth=1;c.strokeStyle=css('--grid');c.fillStyle=css('--muted');c.textAlign='right';for(let i=0;i<5;i++){const y=p.t+ih*i/4,val=hi-(hi-lo)*i/4;c.beginPath();c.moveTo(p.l,y);c.lineTo(w-p.r,y);c.stroke();c.fillText(fmt(val,Math.abs(hi-lo)<20?1:0),p.l-8,y+4)}
+  let lo=Math.min(...values),hi=Math.max(...values);if(scale==='symmetric'){hi=Math.max(Math.abs(lo),Math.abs(hi),1);lo=-hi}else if(scale==='tight'){const span=hi-lo,pad=span?span*.08:Math.max(Math.abs(lo)*.05,.1);lo-=pad;hi+=pad}else{lo=Math.min(0,lo);hi=Math.max(hi,1)}if(lo===hi)hi=lo+1;
+  const digits=Math.abs(hi-lo)<2?2:Math.abs(hi-lo)<20?1:0;c.font='11px ui-monospace,monospace';c.lineWidth=1;c.strokeStyle=css('--grid');c.fillStyle=css('--muted');c.textAlign='right';for(let i=0;i<5;i++){const y=p.t+ih*i/4,val=hi-(hi-lo)*i/4;c.beginPath();c.moveTo(p.l,y);c.lineTo(w-p.r,y);c.stroke();c.fillText(fmt(val,digits),p.l-8,y+4)}
   const start=Date.now()-hours*3600e3,end=Date.now(),x=t=>p.l+iw*(new Date(t)-start)/(end-start),y=v=>p.t+ih*(hi-v)/(hi-lo);
-  for(const s of series){c.strokeStyle=s.color;c.lineWidth=1.8;c.beginPath();let begun=false;for(const r of rows){if(!finite(r[s.key])){begun=false;continue}const xx=x(r.at),yy=y(r[s.key]);if(!begun){c.moveTo(xx,yy);begun=true}else c.lineTo(xx,yy)}c.stroke()}
+  for(const s of series){if(s.points){c.fillStyle=s.color;for(const r of rows){if(!finite(r[s.key]))continue;const xx=x(r.at),yy=y(r[s.key]);c.fillRect(xx-1.5,yy-1.5,3,3)}continue}c.strokeStyle=s.color;c.lineWidth=1.8;c.beginPath();let begun=false;for(const r of rows){if(!finite(r[s.key])){begun=false;continue}const xx=x(r.at),yy=y(r[s.key]);if(!begun){c.moveTo(xx,yy);begun=true}else c.lineTo(xx,yy)}c.stroke()}
   c.fillStyle=css('--muted');c.textAlign='left';c.fillText(`${hours}h ago`,p.l,h-6);c.textAlign='right';c.fillText('now',w-p.r,h-6)
 }
 // Rolling median. Spikes here are outliers — a dropped PPS sample, a
@@ -126,12 +126,12 @@ function render(){
     label+=winMin>=60?` · ${fmt(winMin/60,1)} h`:` · ${winMin} min`;
   }
   btn.textContent=label;
-  lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],true);
+  lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],'symmetric');
   lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);
-  lineChart($('#receiver-chart'),rows,[{key:'receiver_tacc_ns',color:css('--cyan')}]);
+  lineChart($('#receiver-chart'),rows,[{key:'receiver_tacc_ns',color:css('--cyan'),points:true}]);
   lineChart($('#rf-chart'),rows,[{key:'jam0',color:css('--amber')},{key:'jam1',color:css('--cyan')}]);
-  lineChart($('#rb-chart'),rows,[{key:'rbppb',color:css('--amber')}],true);
-  lineChart($('#mikes-chart'),rows,mikesNames.map((name,i)=>({key:`mikes${i}`,color:css(mikesColors[i])})),true);
+  lineChart($('#rb-chart'),rows,[{key:'rbppb',color:css('--amber')}],'tight');
+  lineChart($('#mikes-chart'),rows,mikesNames.map((name,i)=>({key:`mikes${i}`,color:css(mikesColors[i])})),'symmetric');
   const mikesLegend=$('#mikes-legend');mikesLegend.replaceChildren();for(const [i,source] of (latest.mikes_sources||[]).entries()){const item=document.createElement('span');item.className='key';item.style.setProperty('--key',css(mikesColors[i]));item.textContent=`${source.name} ${fmt(source.offset_ns/1e3,0)} ± ${fmt(source.error_ns/1e3,0)} µs`;mikesLegend.append(item)}
 }
 document.querySelectorAll('[data-hours]').forEach(b=>b.onclick=()=>{hours=+b.dataset.hours;document.querySelectorAll('[data-hours]').forEach(x=>x.classList.toggle('active',x===b));render()});$('#smooth-btn').onclick=()=>{smooth=!smooth;try{localStorage.setItem('clock-smooth',smooth?'1':'0')}catch{};render()};addEventListener('resize',()=>payload&&render());
