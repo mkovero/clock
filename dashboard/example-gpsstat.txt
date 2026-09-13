@@ -3,6 +3,9 @@ chrony
   ref 50505332 (PPS2) | stratum 1 | 0.000000004 seconds fast of NTP time | RMS 31ns
   OK    disciplined by PPS2 (GNSS 1 PPS via PHC)
   OK    refclock PPS2 reach 377, last -4ns
+  chrony MIKES time.mikes.fi | stratum 2 | reach 377 | offset -557us | error 6871us
+  chrony MIKES time1.mikes.fi | stratum 2 | reach 377 | offset -356us | error 7479us
+  chrony MIKES ftp.mikes.fi | stratum 2 | reach 377 | offset -1116us | error 9132us
 
 gpsd -> chrony SHM
   gpsd up since Thu 2026-09-10 18:04:04 UTC

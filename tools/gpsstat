@@ -49,6 +49,7 @@ if ! command -v chronyc >/dev/null; then
 else
 	TRACK=$(chronyc -n tracking 2>/dev/null)
 	SRC=$(chronyc -n sources 2>/dev/null)
+	SRC_NAMES=$(chronyc sources 2>/dev/null)
 
 	REFID=$(awk -F': *' '/^Reference ID/{print $2}' <<<"$TRACK")
 	STRATUM=$(awk -F': *' '/^Stratum/{print $2}' <<<"$TRACK")
@@ -86,6 +87,17 @@ else
 	if ! grep -q '^#' <<<"$SRC"; then
 		fail "no refclocks configured in chrony.conf"
 	fi
+
+	# Network comparison against Finland's national time service. Keep this as a
+	# stable, parseable line: the dashboard archives the adjusted offset and NTP
+	# root distance, while the human-readable source names come from chrony's
+	# non-numeric view. Positive offset means the local clock is ahead.
+	awk '$1 ~ /^\^/ && $2 ~ /(^|\.)mikes\.fi$/ {
+		offset = $7
+		sub(/\[.*/, "", offset)
+		printf "  chrony MIKES %s | stratum %s | reach %s | offset %s | error %s\n",
+		       $2, $3, $5, offset, $NF
+	}' <<<"$SRC_NAMES"
 fi
 
 # ---------------------------------------------------------------- gpsd SHM

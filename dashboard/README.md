@@ -71,3 +71,9 @@ is the receiver's own classification. The spoof state reports what the receiver
 detector indicated; “none indicated” is not proof that every received signal is
 authentic. The history is useful for correlating changes with C/N0, satellite count,
 position, and timing behavior.
+
+The MIKES comparison plots Chrony's adjusted offset for each of the three configured
+national time-service servers. Positive means the local clock is ahead of the server;
+the displayed `±` value is the NTP root distance. Network delay and sample noise make
+this a useful millisecond-scale sanity check, not a calibration of the GNSS PPS or its
+fixed delays.

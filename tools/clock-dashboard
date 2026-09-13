@@ -94,6 +94,19 @@ def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
             sample["pps_stddev_ns"] = quantity_ns(match.group(2))
             continue
 
+        match = re.match(
+            r"^  chrony MIKES (\S+) \| stratum (\d+) \| reach (\d+)"
+            r" \| offset (\S+) \| error (\S+)$", line)
+        if match:
+            sample.setdefault("mikes_sources", []).append({
+                "name": match.group(1),
+                "stratum": int(match.group(2)),
+                "reach": int(match.group(3)),
+                "offset_ns": quantity_ns(match.group(4)),
+                "error_ns": quantity_ns(match.group(5)),
+            })
+            continue
+
         # Reference oscillator. The CM4's timebase is the AR-40A via the Si5351,
         # so chrony's frequency estimate is a direct measurement of the rubidium
         # against UTC. Tracked here because aging only shows over weeks, and
@@ -259,7 +272,7 @@ def public_history(samples: list[dict], now: datetime) -> list[dict]:
     chart_keys = (
         "at", "status", "pps_offset_ns", "pps_stddev_ns", "receiver_tacc_ns",
         "max_error_ns", "sats_used", "sats_seen", "rf_blocks", "spoof_state",
-        "spoof_code", "ref_freq_offset", "ref_freq_skew", "mode",
+        "spoof_code", "ref_freq_offset", "ref_freq_skew", "mikes_sources", "mode",
     )
     recent_cutoff = now - timedelta(hours=24)
     selected: dict[int, dict] = {}
