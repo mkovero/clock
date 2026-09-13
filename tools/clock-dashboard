@@ -17,6 +17,9 @@ from pathlib import Path
 
 
 SCHEMA_VERSION = 1
+DEFAULT_RETENTION_DAYS = 365.0
+FULL_RESOLUTION_DAYS = 7
+QUARTER_HOUR_DAYS = 30
 STATUS_RE = re.compile(r"^  (OK|WARN|FAIL|NOTE)\s+(.*)$")
 NUMBER_RE = re.compile(r"([+-]?[0-9]+(?:\.[0-9]+)?)\s*(ns|us|ms|s|seconds?)?", re.I)
 UNIT_NS = {"ns": 1.0, "us": 1_000.0, "ms": 1_000_000.0, "s": 1_000_000_000.0,
@@ -270,8 +273,24 @@ def atomic_history(path: Path, samples: list[dict]) -> None:
             os.unlink(temporary)
 
 
+def append_history(path: Path, sample: dict) -> None:
+    """Append one durable JSONL record without rewriting the full archive."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as stream:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell():
+            stream.seek(stream.tell() - 1)
+            if stream.read(1) != "\n":
+                stream.write("\n")
+        stream.write(json.dumps(sample, separators=(",", ":"), ensure_ascii=False,
+                                allow_nan=False) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(path, 0o600)
+
+
 def public_history(samples: list[dict], now: datetime) -> list[dict]:
-    """Keep recent charts dense and make older public data cheap to upload."""
+    """Publish 7 days at full resolution, 30 days at 15 min, then hourly."""
     if not samples:
         return []
     chart_keys = (
@@ -279,16 +298,20 @@ def public_history(samples: list[dict], now: datetime) -> list[dict]:
         "max_error_ns", "sats_used", "sats_seen", "rf_blocks", "spoof_state",
         "spoof_code", "ref_freq_offset", "ref_freq_skew", "mikes_sources", "mode",
     )
-    recent_cutoff = now - timedelta(hours=24)
-    selected: dict[int, dict] = {}
+    full_cutoff = now - timedelta(days=FULL_RESOLUTION_DAYS)
+    quarter_hour_cutoff = now - timedelta(days=QUARTER_HOUR_DAYS)
+    hourly: dict[int, dict] = {}
+    quarter_hourly: dict[int, dict] = {}
     recent = []
     for item in samples[:-1]:
         timestamp = datetime.fromisoformat(item["at"].replace("Z", "+00:00"))
-        if timestamp >= recent_cutoff:
+        if timestamp >= full_cutoff:
             recent.append(item)
+        elif timestamp >= quarter_hour_cutoff:
+            quarter_hourly[int(timestamp.timestamp()) // 900] = item
         else:
-            selected[int(timestamp.timestamp()) // 1800] = item
-    history = list(selected.values()) + recent
+            hourly[int(timestamp.timestamp()) // 3600] = item
+    history = list(hourly.values()) + list(quarter_hourly.values()) + recent
     compact = [{key: item[key] for key in chart_keys if key in item} for item in history]
     compact.append(samples[-1])
     return compact
@@ -305,7 +328,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("data.json"))
     parser.add_argument("--survey-meta", type=Path,
                         default=Path.home() / "f9t-survey/survey.meta")
-    parser.add_argument("--retention-days", type=float, default=14.0)
+    parser.add_argument("--retention-days", type=float, default=DEFAULT_RETENTION_DAYS)
     parser.add_argument("--timeout", type=float, default=45.0)
     args = parser.parse_args()
 
@@ -336,16 +359,32 @@ def main() -> int:
     lock_path = args.history.with_suffix(args.history.suffix + ".lock")
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        samples = read_history(args.history)
-        samples.append(sample)
+        stored_samples = read_history(args.history)
+        stored_samples.append(sample)
         cutoff = now - timedelta(days=args.retention_days)
-        samples = [item for item in samples if
+        samples = [item for item in stored_samples if
                    datetime.fromisoformat(item["at"].replace("Z", "+00:00")) >= cutoff]
-        atomic_history(args.history, samples)
+
+        # Normal collection appends about 2 kB. Once retention starts expiring
+        # records, batch their removal at most daily instead of rewriting a
+        # roughly 177 MiB annual archive on every five-minute run. Publication
+        # uses the exactly filtered in-memory list even while the private file
+        # temporarily carries up to one extra day.
+        prune_slack = timedelta(days=min(1.0, args.retention_days / 10.0))
+        oldest = datetime.fromisoformat(stored_samples[0]["at"].replace("Z", "+00:00"))
+        if oldest < cutoff - prune_slack:
+            atomic_history(args.history, samples)
+        else:
+            append_history(args.history, sample)
         atomic_json(args.output, {
             "schema": SCHEMA_VERSION,
             "generated_at": collected_at,
             "retention_days": args.retention_days,
+            "resolution": {
+                "full_days": FULL_RESOLUTION_DAYS,
+                "quarter_hour_days": QUARTER_HOUR_DAYS,
+                "older_seconds": 3600,
+            },
             "samples": public_history(samples, now),
         })
 
