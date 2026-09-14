@@ -1,7 +1,7 @@
 # Plan
 
 Working document. What happens next, in order, with what to expect from each step.
-Background and reasoning live in `README.md`; this is the checklist.
+Background and reasoning live in `README.md` and `docs/`; this is the checklist.
 
 Last updated 2026-09-14.
 
@@ -173,7 +173,7 @@ No second survey — this is a config write against a receiver already in fixed 
 **b. The receiver clock series.** Its offset against the PPP timescale is the rig's
 **absolute time bias**, and it is the only way to get that number. chrony cannot supply
 it: chrony steers the system clock to the PPS, so a constant offset is absorbed by the
-servo and `sourcestats` reads `Offset -0ns` regardless (README §10).
+servo and `sourcestats` reads `Offset -0ns` regardless (docs/timing.md).
 
 That measured bias includes the **antenna LNA group delay** (typically 10–30 ns,
 unspecified for this antenna) and the receiver's internal delay, both currently
@@ -253,7 +253,7 @@ wants ppm) and to bench instruments.
 
 ### What trimming would cost
 
-- **Unknown trimmer position.** From the manual (README §3): under the calibration
+- **Unknown trimmer position.** From the manual (docs/hardware.md): under the calibration
   sticker, **1 turn ≈ 5×10⁻¹⁰, 10 turns total**. Nulling −2.55×10⁻⁹ needs ~5.1 turns in
   one direction — right at the endstop if it was left near centre, and nothing records
   where it sits.
@@ -282,11 +282,9 @@ is.
 
 ## Step 4 — smaller items, no particular order
 
-- **NMEA `offset` is wrong by ~0.2 s.** With `offset 0.028` the source reads +201 to
-  +223 ms. Harmless today (NMEA is `noselect` and only numbers PPS pulses, needing
-  ±0.5 s) but it spends half the ambiguity budget. Correct to ≈0.24 — **determine the
-  sign empirically**, chrony's display convention is easy to invert — and do it
-  deliberately, since it costs a chronyd restart.
+- ~~**NMEA `offset` is wrong by ~0.2 s.**~~ Overtaken by the 115200 baud change: on Arch
+  `chrony.conf` carries no `offset` and NMEA reads ~+60 ms (2026-09-14), well inside the
+  ±0.5 s second-numbering budget.
 - ~~**UART1 at 38400 is the latency.**~~ **Done 2026-09-11, forced.** Enabling RAWX and
   SFRBX for the survey pushed the serial cycle from ~250 ms to ~919 ms, past the ±0.5 s
   that PPS second-numbering needs. chrony numbered the pulse to the wrong second and put
@@ -297,8 +295,23 @@ is.
   on UART1.
 - **Build the connectors:** 75 Ω terminator, 50 Ω terminator, BNC tee. Still the only
   thing gating the DA/Orion measurement, which now needs the scope carried to the rack.
+  At 10 MHz a few cm of unmatched junction is invisible, so home-made parts are fine;
+  what matters is the **value** — measure each resistor and use the measured figure.
+  Build terminators as male plugs (they go on the free leg of the tee), leads short,
+  resistor body inside the shell.
 - **DA output into a real 75 Ω load, and Orion's actual termination** — one procedure,
-  three readings (README §7 item 8).
+  three readings at the Orion input, same setup and probe:
+  1. Cable open → **V_open**, the DA's unloaded output.
+  2. Known 75 Ω terminator on the free leg of the tee → ≈ V_open/2 means the build-out
+     really is 75 Ω and the DA drives a real load without sagging.
+  3. Orion connected → its input resistance is 75 × V_orion / (V_open − V_orion);
+     ~1.26 V against ~2.5 V open means it terminates at 75 Ω.
+
+  Not blocking the timing board: its input termination is jumper-selectable.
+- **Teensy `dataErr` rate.** Rejected I2C readings still accumulate slowly in the rack,
+  with 4.9 kΩ pull-ups fitted and the laptop disconnected. Rejections are safe (CLK4
+  holds), but "slowly" is not a number: reset the Teensy, record errors per hour, then
+  try a second 4.9 kΩ in parallel per line (≈2.1 kΩ) and compare.
 - **Antenna inspection:** where the coax shield is bonded, and a gas-discharge arrestor
   at the entry point if the run is roof-mounted.
 - ~~**`ntpsec` leftover** `ntploggps` cron entry.~~ Gone with Ubuntu (2026-09-14).
@@ -314,7 +327,7 @@ Recorded so these do not get re-opened by accident.
 - **DGNSS in the steady state.** A base station does not consume corrections, and if it
   did they would carry the reference station's own clock offset straight into the time
   solution — making the rig traceable to a FinnRef clock rather than to UTC. It was only
-  ever a survey tool. Full reasoning in README §10.
+  ever a survey tool. Full reasoning in docs/timing.md.
 - **GLONASS.** FDMA, so each satellite carries its own receiver hardware bias.
   Calibrating inter-frequency bias is a real job and timing configurations routinely
   leave it out.
@@ -328,7 +341,7 @@ Recorded so these do not get re-opened by accident.
   would make DGNSS injection work, but it inserts a new failure point into the data path
   for a service capped at 0.5 m — and see the first entry.
 - **Characterising CLK4 amplitude at CM4 XIN.** Needs a second identical CM4 to
-  experiment on (README §8).
+  experiment on (docs/hardware.md).
 - **Boot-console bridge.** GPIO14/15 are occupied by the F9T.
 
 ---
@@ -347,78 +360,10 @@ period in the history (rover mode, expected).
 
 ---
 
-## Reference — the tools
+## Reference
 
-| Tool | Purpose |
-|---|---|
-| `gpsstat` | one-screen health of the whole chain; exit 0/1/2 for cron |
-| `f9t-survey` | `start` / `status` / `finish` / `abort` the position survey |
-| `f9t-ppp` | RAWX → RINEX for PPP submission |
-| `ubx-dump-config` | full CFG dump, both layers, paged |
-| `ubx-apply-config` | apply a key/value file, verifying every write by readback |
-| `ntrip-relay` | NTRIP client and local re-caster; unused in steady state |
-
-Two traps these encode:
-
-- **`ubxtool` must name its gpsd device** whenever more than one is attached, or every
-  readback silently returns empty. This first appeared as a survey that *reported*
-  disabling TMODE while changing nothing.
-- **`UBX-CFG-VALGET` returns at most 64 items**, so dumping a large group must page with
-  the `position` field. The first backup silently truncated `CFG-MSGOUT` to 64 of its
-  561 keys.
-
----
-
-## Error budget — where the nanoseconds are
-
-State after the 2026-09-10 changes, the survey and PPP (2026-09-12).
-
-| Term | Size | Status |
-|---|---|---|
-| Antenna cable delay | 35 ns | **fixed** — 5 → 40 ns, calculated not measured |
-| Stored position | 1.35 ns | **fixed** — PPP 2026-09-12 (was ~19 ns, stale after the antenna move) |
-| Antenna LNA group delay | 10–30 ns `[?]` | **uncompensated**, unmeasurable on the rig |
-| Receiver internal delay | unknown `[?]` | **uncompensated**, unmeasurable on the rig |
-| chrony PPS2 jitter (std dev) | 22 ns | random, averages out |
-| Receiver time solution (`tAcc`) | 1 ns | was 3 ns before dual-frequency Galileo |
-| Ionospheric residual | few ns | reduced by GPS L1+L2C and Galileo E1+E5b |
-
-Two things worth reading off this table:
-
-**The systematic terms dominate, and most are still unmeasured.** Cable delay, LNA delay
-and receiver delay are constant offsets — they do not average out, and no amount of
-observation on this rig reveals them. PPP does not either (Step 2 correction); it takes a
-calibrated counter against a second reference, or common-view against a laboratory.
-
-**The position work was polish, not repair.** It bought ~18 ns against a 35 ns cable fix
-that cost one config write. The biggest remaining prize is the LNA and receiver delay
-pair, and nothing on the rig can measure it.
-
----
-
-## Recovery — if something goes wrong
-
-**Receiver configuration is wrong:** every key in `config/f9t-config-ram.txt` is a
-`<key> <value>` line, so a restore is `ubx-apply-config` against a filtered copy of that
-file. The dump is complete — 945 keys, RAM and Flash byte-identical at the time it was
-taken.
-
-**GNSS refclocks unreachable after a cold boot:**
-
-```
-sudo systemctl restart gpsd
-```
-
-`gpsd-after-timesync` and `gpsd-shm-watchdog` do this automatically (Step 3); run it by
-hand only if they did not. `gpsstat` will
-show `Reach 0` on both refclocks and `gpsd is NOT writing SHM(0)` when this is the
-problem. Note that `chronyc tracking` alone looks *healthy* in this state — a
-well-disciplined stratum-3 clock — which is exactly why `gpsstat` exists.
-
-**gpsd talking to the wrong device:** if `/etc/default/gpsd` ever lists more than
-`/dev/ttyAMA0`, bare `ubxtool` calls fail with `No path specified in DEVICE`. Either
-remove the extra device or pass `localhost:2947:/dev/ttyAMA0`; the tools do this already
-via `$F9T_TARGET`.
+Tools, the error budget and recovery steps now live in [docs/timing.md](docs/timing.md)
+and [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ---
 

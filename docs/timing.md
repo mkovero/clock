@@ -1,0 +1,203 @@
+# Timing software and GNSS
+
+How time gets from the sky into chrony, NTP and PTP on aika, how the ZED-F9T is
+configured, and what the accuracy figures do and don't mean.
+
+## Host
+
+- **Arch Linux ARM** since 2026-09-14, replacing Ubuntu.
+- **Kernel `linux-aika-rt` 7.2.5**, PREEMPT_RT, built from the Raspberry Pi Foundation
+  fork and packaged locally with a bcmgenet hardware-timestamping patch. PHY timestamping
+  (`bcm_phy_ptp`) depends on that kernel. The kernel and image build trees are outside
+  this repo.
+- `ethtool -T eth0` should report hardware transmit/receive with the PHY as timestamp
+  source.
+
+## The chain
+
+```
+F9T TIME2 ──► PHY extts (/dev/ptp0) ──► chrony refclock PPS2 ─┐
+F9T UART1 ──► gpsd ──► SHM(0) ──► chrony refclock NMEA ───────┤ (numbers the second)
+                                                              ▼
+                                                     CLOCK_REALTIME ──► chronyd NTP server
+                                                              │
+                                              phc2sys ──► PHC ──► ptp4l grandmaster
+```
+
+### chrony (`/etc/chrony.conf`)
+
+```
+refclock PHC /dev/ptp0:extpps poll 4 precision 1e-9 refid PPS2 lock NMEA prefer maxunreach 10800
+refclock SHM 0 poll 4 refid NMEA noselect
+server time.mikes.fi  iburst minpoll 6 maxpoll 12
+server time1.mikes.fi iburst minpoll 6 maxpoll 12
+server time2.mikes.fi iburst minpoll 6 maxpoll 12
+driftfile /var/lib/chrony/chrony.drift
+makestep 1 3
+rtcsync
+lock_all
+```
+
+- **PPS2** supplies the edge. `lock NMEA` means it needs a sample from the NMEA source to
+  decide which second a pulse belongs to. The NMEA sample must fall within ±0.5 s of the
+  second, or the pulse is numbered to the wrong second
+  ([troubleshooting](troubleshooting.md#uart-bandwidth-is-a-correctness-constraint)).
+- **NMEA** is `noselect` and used only for labelling. At 115200 it reads about +60 ms.
+- **MIKES** servers sit ~1 ms from the local clock with ~10 ms error bars. They are a
+  sanity check, not a reference.
+- There is no `/dev/pps0`. gpsd logs `unable to read /dev/pps0` on startup, and that
+  message is harmless.
+- Use the drift file (`ref_freq_offset` in `gpsstat`) to judge rubidium frequency.
+  `chronyc tracking` rounds to 1×10⁻⁹.
+
+### gpsd
+
+`/etc/default/gpsd`: `DEVICES="/dev/ttyAMA0"`, `GPSD_OPTIONS="--listenany --nowait
+--badtime --passive"`. gpsd owns ttyAMA0 exclusively (`TIOCEXCL`), and ser2net is
+disabled. `--passive` means gpsd never writes configuration to the receiver; ubxtool
+handles that through gpsd.
+
+### PTP
+
+- `ptp4l@eth0.service` runs ptp4l as grandmaster from `/etc/linuxptp/ptp4l.conf`.
+  Arch's linuxptp package ships no systemd units, so these are local.
+- `phc2sys@eth0.service` runs `phc2sys -s CLOCK_REALTIME -c eth0` to push the
+  disciplined system clock into the PHC.
+- `eee-off@eth0.service` runs `ethtool --set-eee eth0 eee off` before ptp4l starts.
+  Energy Efficient Ethernet ruins PTP latency, and on 7.2 the `genet.eee=N` kernel option
+  is ignored.
+
+### gpsd self-healing
+
+gpsd silently stops feeding SHM(0) after a large clock step
+([troubleshooting](troubleshooting.md#dead-rtc--gpsd--chrony)). Two local units cover
+this:
+
+- `gpsd-after-timesync.service` runs `systemctl try-restart gpsd` after `time-sync.target`.
+- `gpsd-shm-watchdog.timer` checks every minute and restarts gpsd if SHM(0) has stopped.
+
+Do not order gpsd after `chrony-wait` instead. If the network is down at boot, chrony has
+no source, `chrony-wait` blocks, and gpsd, the only remaining time source, never starts.
+
+### Monitoring
+
+`tools/gpsstat` (installed as `~/bin/gpsstat`) checks each link in the order it tends to
+break: chrony refclock reach, whether gpsd is writing SHM(0), fix and geometry, RF
+jamming and spoofing indicators, rubidium frequency, GNSS-vs-rubidium consistency, and
+hardware facts (RTC, ser2net, PHC driver). It exits 0 when healthy, 1 when degraded and 2
+when GNSS timing is down. `gpsstat -v` also reads the key receiver settings back.
+
+- Use `note()` for known, accepted conditions and `warn()`/`fail()` only for things that
+  need action. The dashboard runs it on a schedule, so a permanent non-zero exit would
+  hide real failures.
+- RF block jamming state is judged against a site baseline (`F9T_RF_BASELINE`, default
+  `0:60 1:7`).
+- `config/f9t-reminders` holds date-gated reminders, which gpsstat prints as notes.
+
+`tools/clock-dashboard` archives gpsstat output every 5 minutes and publishes the static
+page. See [dashboard/README.md](../dashboard/README.md).
+
+## ZED-F9T configuration
+
+| Setting | Value |
+|---|---|
+| Mode | `CFG-TMODE-MODE=2`, fixed LLA |
+| Position | 60.179598272°, 24.958742464°, 21.2083 m ellipsoidal (ITRF20). PPP 2026-09-12, 0.41 m 3D (1σ) ≈ 1.35 ns. Keys in `config/f9t-ppp-position.txt` |
+| Time pulse | TP2 1 Hz, 50% duty, `USE_LOCKED_TP2=1`, locked-only since 2026-09-14 |
+| Cable delay | `CFG-TP-ANT_CABLEDELAY=40` ns (8 m ÷ (0.66 c) = 40.4 ns). Excludes LNA and receiver delay |
+| Signals | GPS L1C/A + L2C, Galileo E1 + E5b, BeiDou B1I + B2I |
+| UART1 | 115200. RTCM3 base-station output off. RAWX/SFRBX on only while logging for PPP |
+
+- **Position error becomes constant time bias** at about 3.3 ns per metre, because TMODE
+  fixed treats the position as truth. `CFG-TMODE-HEIGHT` is height **above the
+  ellipsoid**. Entering geoid height here would add an error of ~17 m, about 57 ns.
+- **Constellations deliberately left off:** GLONASS (FDMA inter-frequency biases), QZSS
+  (not visible at 60°N) and SBAS (adds nothing to a fixed dual-frequency receiver). The
+  reasoning is kept in `config/f9t-timing-changes.txt`. BeiDou B2I is enabled but never
+  shows up in RINEX, probably a firmware limit, and it has been left alone.
+- The per-constellation `CFG-SIGNAL-*_ENA` master switches can read 1 even when every
+  signal under them is 0. Check the individual signal keys.
+
+### Files in `config/`
+
+| File | What |
+|---|---|
+| `f9t-config-ram.txt`, `f9t-config-flash.txt` | full CFG dump from 2026-09-10, taken **before** the timing changes. 945 keys, restorable |
+| `f9t-timing-changes.txt` | changes applied since then, with reasons (`ubx-apply-config … 7`) |
+| `survey-2026-09-11.meta` | standalone survey result, superseded by PPP |
+| `ppp-2026-09-12.sum`, `f9t-ppp-position.txt` | CSRS-PPP report and the TMODE keys written from it |
+| `f9t-reminders` | date-gated reminders shown by `gpsstat` |
+
+## Bias and error budget
+
+**chrony cannot see a constant bias.** It measures PPS against the system clock and then
+steers the system clock to the PPS, so any fixed delay is absorbed and `sourcestats`
+reports `Offset ~0ns` no matter what. What remains visible:
+
+- **chrony std dev** is jitter.
+- **`tAcc`** is the receiver's own estimate.
+- **Max-error bound** is root dispersion + delay/2, chrony's guarantee for the system
+  clock.
+
+None of these measures absolute UTC bias. **PPP does not measure it either.** PPP solves
+for the F9T's free-running TCXO clock, while TP2 is corrected against the receiver's own
+solution, so antenna and receiver delays do not show up in the result. Measuring them
+takes a calibrated counter against a second reference, or common-view comparison with a
+laboratory.
+
+| Term | Size | Status |
+|---|---|---|
+| Antenna cable delay | 35 ns | corrected (5 → 40 ns), calculated not measured |
+| Stored position | 1.35 ns | PPP 2026-09-12 (was ~19 ns after the antenna move) |
+| Antenna LNA group delay | typically 10–30 ns | uncompensated, not measurable on the rig |
+| Receiver internal delay | unknown | uncompensated, not measurable on the rig |
+| chrony PPS2 jitter | 20–60 ns | random, averages out |
+| Receiver `tAcc` | 1 ns | — |
+| Ionospheric residual | few ns | reduced by dual-frequency GPS, Galileo and BeiDou |
+
+Fixed offsets are the dominant terms, and the largest of them are still unmeasured.
+
+## Corrections: DGNSS no, PPP for position
+
+**DGNSS (Maanmittauslaitos FinnPos, RTCM MSM1, ~0.5 m) does not belong in the running
+configuration.**
+
+- A receiver in TMODE fixed is a base station and ignores incoming corrections.
+- If corrections were applied, they would make timing worse. A code correction contains
+  the reference station's receiver clock offset. For positioning that offset is absorbed
+  harmlessly, but for timing it would tie the rig to a FinnRef station's clock instead of
+  UTC.
+- DGNSS is only useful during a survey, where the rover's clock is thrown away anyway. In
+  practice it did not work even then: gpsd's relay drops RTCM 1006/1008, so the receiver
+  never formed a differential solution.
+
+gpsd quirks found along the way, encoded in `tools/ntrip-relay`:
+
+- Its `ntrip://` client rejects the `RTCM3.2` format string.
+- A `tcp://` source is never relayed.
+- `dgpsip://` drops the port number.
+- Writing RTCM directly to the serial port fails with `EBUSY` because gpsd holds the port
+  exclusively.
+
+Restructuring so the relay owns the port is not worth it for a 0.5 m service.
+
+**PPP** (RAWX → RINEX → NRCan CSRS-PPP) gave the stored position, using precise orbit and
+clock products with no dependence on another receiver's clock. Resubmitting against
+rapid and final products is tracked in plan.md and `config/f9t-reminders`.
+
+## Tools
+
+Installed by copying into `~/bin` on aika. `F9T_TARGET` / `UBXOPTS` name the gpsd device
+for ubxtool.
+
+| Tool | Purpose |
+|---|---|
+| `gpsstat` | one-screen health check of the whole chain, exit code 0/1/2 |
+| `clock-dashboard` | archive gpsstat snapshots, generate dashboard `data.json` |
+| `publish-clock-dashboard`, `clock-dashboard-askpass` | atomic SFTP publish of the dashboard |
+| `ubx-dump-config` | full CFG dump, RAM and Flash, paged |
+| `ubx-apply-config` | apply a key/value file and verify each write by reading it back |
+| `f9t-rawlog` | log RAWX/SFRBX for PPP without leaving fixed mode; checks UART margin first |
+| `f9t-ppp` | RAWX → RINEX via `convbin` for PPP submission |
+| `f9t-survey` | standalone position survey (rover mode), then write the result into TMODE |
+| `ntrip-relay` | NTRIP client and local re-caster. Not used in steady state |

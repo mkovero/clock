@@ -381,7 +381,7 @@ if [ -n "${FRAC:-}" ]; then
 	printf '  holdover drift if GNSS is lost            : %s us/day\n' \
 		"$(awk -v a="$ABSFRAC" 'BEGIN{ printf "%.1f", a * 86400 * 1e6 }')"
 
-	# Mechanical trim is 10 turns over 5e-9 total, i.e. ~5e-10 per turn (README §3).
+	# Mechanical trim is 10 turns over 5e-9 total, i.e. ~5e-10 per turn (docs/hardware.md).
 	# Printed as turns because that is the unit the adjustment is made in. Whether
 	# the turns are *available* depends on where the trimmer currently sits, which
 	# is not recorded anywhere — see plan.md before opening the case.

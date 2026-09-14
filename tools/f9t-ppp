@@ -8,7 +8,7 @@
 # The standalone average in f9t-survey is limited by multipath, which is tied to
 # satellite geometry and so repeats on a sidereal day. It bottoms out around
 # 0.3-0.5 m — roughly 1-1.7 ns of time bias at 3.3 ns/m. DGNSS would not have
-# done better and is actively wrong for timing anyway (README section 10):
+# done better and is actively wrong for timing anyway (docs/timing.md):
 # differential corrections carry the reference station's own clock offset.
 #
 # PPP uses precise satellite orbit and clock products referenced to a global
