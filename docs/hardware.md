@@ -74,8 +74,8 @@ maximum, and it ran that way for years.
 
 ## Antelope Orion 32 HD — 10M input
 
-Spec: 75 Ω, 1 Vpp nominal sine, self-biasing comparator front end. The actual
-termination has not been confirmed. Every Orion clock mode disciplines the same internal
+**In use**, fed from a DA output. Spec: 75 Ω, 1 Vpp nominal sine, self-biasing
+comparator front end. The actual termination has not been confirmed. Every Orion clock mode disciplines the same internal
 OCXO. The 10M input multiplies by ~×2.26 where word clock multiplies by ×512, so it adds
 far less phase noise and is the right input.
 

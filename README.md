@@ -29,7 +29,7 @@ AccuBeat AR-40A rubidium ── 10 MHz sine
         │
    7 dB pi pad
         │ 1.245 Vpp
-   Extron DA (R plane) ─┬─► Orion 32 HD 10M input (planned)
+   Extron DA (R plane) ─┬─► Orion 32 HD 10M input
                         ├─► bench instruments (planned)
                         │
                         ▼
