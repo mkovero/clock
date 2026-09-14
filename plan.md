@@ -3,29 +3,18 @@
 Working document. What happens next, in order, with what to expect from each step.
 Background and reasoning live in `README.md`; this is the checklist.
 
-Last updated 2026-09-11.
+Last updated 2026-09-14.
 
 ---
 
-## Now — survey running
+## Now
 
-Started `2026-09-11 00:06:42 +03:00`, 10 h, so it completes around **10:07 local**.
-
-The rig is a **rover** for the duration: TMODE is off, and the PPS carries
-position-solution noise. Timing is degraded but chrony stays locked to PPS2 at stratum 1.
-
-TMODE was dropped in the **RAM layer only**, so a power cut during the survey restores
-fixed mode with the old coordinates rather than leaving the rig a rover.
-
-Check progress:
-
-```
-gpsstat                 # whole-chain health, exit-coded
-f9t-survey status       # fixes, scatter, realistic accuracy
-```
-
-Expect the realistic accuracy figure to settle around **0.4 m ≈ 1.3 ns**. Ignore the
-"naive standard error" line — it is printed only to show how misleading it is.
+- **The CM4 runs Arch Linux ARM** with a self-built PREEMPT_RT 7.2 kernel since
+  2026-09-14; Ubuntu is gone. Paths and services below are the Arch ones.
+- Steps 1 and 2 are done (PPP resubmission still pending). F9T TIME2 is locked-only
+  since 2026-09-14.
+- The AR-40A frequency record is building up undisturbed. Leave the trimmer alone
+  (Step 3b).
 
 ---
 
@@ -191,6 +180,8 @@ unspecified for this antenna) and the receiver's internal delay, both currently
 uncompensated. If it shows a consistent offset, fold it into `CFG-TP-ANT_CABLEDELAY` on
 top of the 40 ns cable term — converting those delays from unknown to measured.
 
+</details>
+
 ---
 
 ## Step 3 — the RTC, whenever convenient
@@ -198,78 +189,94 @@ top of the 40 ns cable term — converting those delays from unknown to measured
 The single outstanding *hardware* fault, and the root of the outage on 2026-09-10.
 
 1. **Fit a backup cell** to the CM4 IO Board's RTC connector. The PCF85063 reports
-   `Power loss detected, invalid time`, so every cold boot comes up at the filesystem
-   date via `fixrtc`, chrony steps the clock by years, and gpsd silently stops writing
-   SHM(0) — taking both GNSS refclocks down with it. `rtcsync` is already in
-   `chrony.conf`, so the RTC will be correct as soon as it can hold charge.
-2. **Install `fake-hwclock`** — not currently installed. Belt and braces: boot comes up
-   at last-shutdown time rather than the filesystem date, so even a flat cell leaves a
-   step of hours rather than years.
-3. **Re-arm gpsd after any step.** Prefer a oneshot running `systemctl try-restart gpsd`
-   after `time-sync.target`. Do *not* simply enable `chrony-wait` and order gpsd after
-   it: with the network down at boot, chrony has no source, `chrony-wait` blocks, and
-   gpsd — the only remaining time source — never starts.
+   `Power loss detected, invalid time`, so every cold boot comes up at a stale time,
+   chrony steps the clock, and gpsd silently stops writing SHM(0) — taking both GNSS
+   refclocks down with it. `rtcsync` is already in `chrony.conf`, so the RTC will be
+   correct as soon as it can hold charge. **Still open.**
+2. ~~Install `fake-hwclock`.~~ Not packaged on Arch, and no longer needed: `fixrtc` was an
+   Ubuntu initramfs option and is gone, and systemd raises a clock that reads earlier than
+   its build epoch at boot, so a flat cell costs a step of months at most, not years.
+3. ~~Re-arm gpsd after any step.~~ **Done on Arch 2026-09-14:** `gpsd-after-timesync.service`
+   runs `systemctl try-restart gpsd` after `time-sync.target`, and `gpsd-shm-watchdog.timer`
+   restarts gpsd if SHM(0) stops (every minute, from 5 min after boot). Do *not* order
+   gpsd after `chrony-wait` instead: with the network down at boot, chrony has no source,
+   `chrony-wait` blocks, and gpsd — the only remaining time source — never starts.
 
-Until then: **restart gpsd after any cold boot.** `gpsstat` reports the condition as a
-`NOTE` on every run so it does not get forgotten.
+`gpsstat` still reports the missing cell as a `NOTE` on every run so it does not get
+forgotten.
 
 ---
 
-## Step 3b — trimming the AR-40A, when it has settled
+## Step 3b — trimming the AR-40A: measured, and not needed for timekeeping
 
-**Do not do this yet.** Two reasons, both about the measurement rather than the trimmer.
+**Leave it alone for now, and probably for good.** Measured 2026-09-14.
 
-The AR-40A was power-cycled for the rack move on 2026-09-11. Rubidium retrace after a
-power cycle runs 10⁻¹⁰–10⁻⁹ and settles over days, so trimming now risks chasing warm-up.
-And the present measurement uncertainty is 9.6×10⁻¹¹; averaged over a week it falls
-toward 10⁻¹¹–10⁻¹², a hundredth of a turn. The dashboard is archiving the frequency, so
-waiting costs nothing and the number arrives on its own.
+### What the frequency is doing
 
-**Give it a week undisturbed, then read the trend off the dashboard.**
+`ref_freq_offset` from the dashboard history, 6 h means (chrony drift file, AR-40A vs
+GNSS):
 
-### The arithmetic
+| Window (UTC) | Offset | chrony skew |
+|---|---|---|
+| 09-11 00 | −2.590×10⁻⁹ | 3.5×10⁻¹⁰ |
+| 09-12 00 | −2.529×10⁻⁹ | 1.2×10⁻¹⁰ |
+| 09-13 06 | −2.556×10⁻⁹ | 8.9×10⁻¹¹ |
+| 09-14 12 | −2.532×10⁻⁹ | 3.1×10⁻¹¹ |
 
-`gpsstat` prints both figures every run, so they stay current:
+−2.55×10⁻⁹ ± ~5×10⁻¹¹ since the 2026-09-11 power cycle, with no retrace trend visible
+after 3.5 days. Left out: the disturbed 09-11 18 window (skew up to 8×10⁻⁹) and 09-13 18 →
+09-14 06, when the OS migration stopped the drift file being rewritten (up to 19 h stale).
 
-```
-fractional frequency offset vs GNSS       : -2.5920e-09
-holdover drift if GNSS is lost            : 223.9 us/day
-mechanical trim to null this              : 5.18 turns of 10
-```
+**Read the drift-file figure, never `chronyc tracking`.** `tracking` and `tracking.log`
+print ppm with three decimals, i.e. 1×10⁻⁹ steps, so they show a flat `0.003 ppm slow`
+while the rubidium moves by up to ±5×10⁻¹⁰. The drift file has 1×10⁻¹² resolution
+(`ref_freq_offset`); `ref_freq_live` is the rounded one.
 
-From the manual (README §3): the trimmer sits under the calibration sticker, **1 turn ≈
-5×10⁻¹⁰, 10 turns total**, so the full span is 5×10⁻⁹.
+### Correction: the offset does not cost holdover
 
-At −2.592×10⁻⁹ the correction wanted is **+2.59×10⁻⁹, about 5.2 turns — 52% of the whole
-span, in one direction.**
+An earlier version of this step said the offset drifts the clock by 224 µs/day once GNSS
+is lost, and that trimming would cut that to ~4 µs/day. **That is wrong for the
+timekeeping.** chrony carries the −2.55×10⁻⁹ in its frequency estimate, keeps applying it
+when the refclocks go unreachable, and reloads it from the drift file after a reboot, so
+the static offset never accumulates as time error. Holdover is limited by how much the
+frequency *changes* after the reference is lost — aging, temperature, retrace — and the
+trimmer does nothing about those.
 
-### The catch
+Measured holdover (integral of f(t)−f(t₀) over 63 h of PPS2 lock, 2026-09-13) is p95
+79 µs after 24 h, worst 332 µs. It was computed from the rounded `tracking.log` values, so
+the real figure is likely better. The `holdover drift if GNSS is lost` line in `gpsstat`
+is the static-offset number and overstates holdover the same way (Step 4).
 
-**Where the trimmer currently sits is not recorded anywhere.** If it was left near centre
-at the last calibration there are roughly 5 turns each way, which puts 5.2 turns *right at
-the endstop*. If it happens to be wound the helpful way there is room; the other way,
-there is not.
+PTP and NTP clients follow the corrected clock, so they gain nothing either. The offset
+reaches only consumers of the raw 10 MHz, and 2.6×10⁻⁹ is invisible to the Orion (audio
+wants ppm) and to bench instruments.
 
-Establish that by feel before committing to the adjustment, and **count and write down
-the turns** as they go in — that is the record that does not currently exist. Add it to
-`config/` afterwards.
+### What trimming would cost
 
-### Is it worth doing at all
+- **Unknown trimmer position.** From the manual (README §3): under the calibration
+  sticker, **1 turn ≈ 5×10⁻¹⁰, 10 turns total**. Nulling −2.55×10⁻⁹ needs ~5.1 turns in
+  one direction — right at the endstop if it was left near centre, and nothing records
+  where it sits.
+- **A fresh settle.** A just-moved trimmer can creep for hours to days: a known, stable
+  offset traded for an unknown, moving one.
+- **The aging record restarts.** Aging only shows over weeks; the undisturbed record
+  began 2026-09-11.
+- **Comparisons get spoiled.** A 2.5×10⁻⁹ step in the middle of an OS or kernel
+  comparison run contaminates it.
 
-GNSS supplies accuracy while it is present, and 2.6×10⁻⁹ is invisible to the Orion (audio
-wants ppm) and to bench instruments. The offset shows up in exactly one place: **holdover**.
+### If it gets done anyway
 
-| Offset | Drift with GNSS lost |
-|---|---|
-| now, 2.592×10⁻⁹ | 224 µs/day |
-| trimmed to 5×10⁻¹¹ | 4.3 µs/day |
+1. Not before 2026-09-18 (a week after the power cycle), and not during a comparison run.
+2. **½ turn first, then wait ≥ 1 h** for a fresh drift file. That gives the direction and
+   the real sensitivity. Frequency has to go up (the offset is negative).
+3. **Count and write down every turn**, then continue in ~1-turn steps. Add the record to
+   `config/`.
+4. Judge by `ref_freq_offset` with a fresh `drift file age`, not by `chronyc tracking`.
 
-About 50× longer before the rig stops being useful without GNSS. That is the case for
-doing it, and whether it matters depends on whether holdover matters here.
-
-Note this is ordinary aging, not a fault. Spec is <1×10⁻⁹ the first year and <5×10⁻¹⁰/yr
-after, so 2.59×10⁻⁹ implies at least ~4 years and realistically much longer — the unit is
-behaving like an old rubidium that has not been recalibrated, which is what it is.
+The offset itself is ordinary aging, not a fault. Spec is <1×10⁻⁹ the first year and
+<5×10⁻¹⁰/yr after, so 2.55×10⁻⁹ implies at least ~4 years and realistically much longer —
+the unit is behaving like an old rubidium that has not been recalibrated, which is what it
+is.
 
 ---
 
@@ -294,9 +301,9 @@ behaving like an old rubidium that has not been recalibrated, which is what it i
   three readings (README §7 item 8).
 - **Antenna inspection:** where the coax shield is bonded, and a gas-discharge arrestor
   at the entry point if the run is roof-mounted.
-- **`ntpsec` leftover** still runs an `ntploggps` cron entry. Guarded by
-  `[ ! -d /run/systemd/system ]` so it never fires here, but it is dead weight sitting
-  next to chrony.
+- ~~**`ntpsec` leftover** `ntploggps` cron entry.~~ Gone with Ubuntu (2026-09-14).
+- **`gpsstat` holdover line** prints the static-offset drift (~224 µs/day), which chrony
+  already corrects (Step 3b). Relabel it, or replace it with a measured holdover figure.
 
 ---
 
@@ -329,13 +336,10 @@ Recorded so these do not get re-opened by accident.
 ## Dashboard interaction
 
 `dashboard/` collects `gpsstat` every 5 minutes via `/etc/cron.d/aika-clock-dashboard`
-and publishes to <https://www.mui.fi/clock/>. Two consequences for the steps above:
+and publishes to <https://www.mui.fi/clock/>. The 2026-09-11 survey shows as a degraded
+period in the history (rover mode, expected).
 
-- **The survey window will show as a degraded period in the history.** While TMODE is
-  off the rig is a rover, so PPS jitter and the reported accuracy are worse than the
-  steady state. That is expected, not a fault — it starts 2026-09-11 00:06 and ends at
-  `f9t-survey finish`.
-- **`gpsstat` is now on a schedule, so its exit code matters more than before.** This is
+- **`gpsstat` is on a schedule, so its exit code matters more than before.** This is
   why the RTC condition is a `NOTE` rather than a `WARN`: a known, accepted fault must
   not hold the dashboard at a permanent non-zero verdict, or a real failure stops
   standing out. Keep that distinction when adding checks — `note()` for accepted
@@ -367,14 +371,14 @@ Two traps these encode:
 
 ## Error budget — where the nanoseconds are
 
-Current state, after the 2026-09-10 changes and with the survey still running.
+State after the 2026-09-10 changes, the survey and PPP (2026-09-12).
 
 | Term | Size | Status |
 |---|---|---|
 | Antenna cable delay | 35 ns | **fixed** — 5 → 40 ns, calculated not measured |
-| Stored position, stale since the antenna moved | ~19 ns | survey in progress → ~1.3 ns |
-| Antenna LNA group delay | 10–30 ns `[?]` | **uncompensated**, unmeasurable here; PPP |
-| Receiver internal delay | unknown `[?]` | **uncompensated**; PPP |
+| Stored position | 1.35 ns | **fixed** — PPP 2026-09-12 (was ~19 ns, stale after the antenna move) |
+| Antenna LNA group delay | 10–30 ns `[?]` | **uncompensated**, unmeasurable on the rig |
+| Receiver internal delay | unknown `[?]` | **uncompensated**, unmeasurable on the rig |
 | chrony PPS2 jitter (std dev) | 22 ns | random, averages out |
 | Receiver time solution (`tAcc`) | 1 ns | was 3 ns before dual-frequency Galileo |
 | Ionospheric residual | few ns | reduced by GPS L1+L2C and Galileo E1+E5b |
@@ -383,33 +387,21 @@ Two things worth reading off this table:
 
 **The systematic terms dominate, and most are still unmeasured.** Cable delay, LNA delay
 and receiver delay are constant offsets — they do not average out, and no amount of
-observation on this rig reveals them. Only PPP does.
+observation on this rig reveals them. PPP does not either (Step 2 correction); it takes a
+calibrated counter against a second reference, or common-view against a laboratory.
 
-**The survey is polish, not repair.** It buys ~1.3 ns against a 35 ns cable fix that cost
-one config write. Worth doing, but keep the proportion in mind: the biggest remaining
-prize is the LNA and receiver delay pair, and that is Step 2.
+**The position work was polish, not repair.** It bought ~18 ns against a 35 ns cable fix
+that cost one config write. The biggest remaining prize is the LNA and receiver delay
+pair, and nothing on the rig can measure it.
 
 ---
 
 ## Recovery — if something goes wrong
 
-**Survey went wrong, or needs abandoning:**
-
-```
-f9t-survey abort        # restores fixed mode with the previous coordinates
-```
-
-The previous values are also in `~/f9t-survey/survey.meta` as `old_CFG_TMODE_*`, and the
-whole pre-change receiver state is in `config/f9t-config-{ram,flash}.txt` in git.
-
 **Receiver configuration is wrong:** every key in `config/f9t-config-ram.txt` is a
 `<key> <value>` line, so a restore is `ubx-apply-config` against a filtered copy of that
 file. The dump is complete — 945 keys, RAM and Flash byte-identical at the time it was
 taken.
-
-**A power cut during the survey** needs no action: TMODE was changed in the RAM layer
-only, so the receiver comes back in fixed mode with the old coordinates. Restart the
-survey if wanted.
 
 **GNSS refclocks unreachable after a cold boot:**
 
@@ -417,7 +409,8 @@ survey if wanted.
 sudo systemctl restart gpsd
 ```
 
-That is the standing workaround for the RTC fault until Step 3 is done. `gpsstat` will
+`gpsd-after-timesync` and `gpsd-shm-watchdog` do this automatically (Step 3); run it by
+hand only if they did not. `gpsstat` will
 show `Reach 0` on both refclocks and `gpsd is NOT writing SHM(0)` when this is the
 problem. Note that `chronyc tracking` alone looks *healthy* in this state — a
 well-disciplined stratum-3 clock — which is exactly why `gpsstat` exists.
@@ -462,5 +455,3 @@ verdict
 
 Exit code 0. The RTC line stays a `NOTE` rather than a `WARN` deliberately — known and
 accepted, so it does not mask conditions that are actually news.
-
-</details>
