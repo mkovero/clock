@@ -23,8 +23,9 @@ to exactly one year even during the private archive's one-day pruning slack.
 
 The page offers live windows from 30 minutes through one year. Its custom `from` and
 `to` inputs use the browser's local time; applying them creates fixed ISO timestamps in
-the URL so the view can be bookmarked or shared. Selecting any preset returns to a
-window ending at the current time, and `latest 24h` resets the custom form directly.
+the URL fragment so the view can be bookmarked or shared without the hosting provider
+handling the parameters. Selecting any preset returns to a window ending at the current
+time, and `latest 24h` resets the custom form directly.
 Charts default to a rolling median so brief restart, reacquisition, and maintenance
 outliers do not flatten the useful scale. The active `smoothed` control states both the
 mode and approximate median window; selecting it exposes every raw sample, and that
