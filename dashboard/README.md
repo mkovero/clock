@@ -25,6 +25,10 @@ The page offers live windows from 30 minutes through one year. Its custom `from`
 `to` inputs use the browser's local time; applying them creates fixed ISO timestamps in
 the URL so the view can be bookmarked or shared. Selecting any preset returns to a
 window ending at the current time, and `latest 24h` resets the custom form directly.
+Charts default to a rolling median so brief restart, reacquisition, and maintenance
+outliers do not flatten the useful scale. The active `smoothed` control states both the
+mode and approximate median window; selecting it exposes every raw sample, and that
+choice is retained in the browser.
 
 The collector does not read Chrony's log directory. `gpsstat` is the canonical view of
 this particular rig because it checks the whole path—Chrony, gpsd SHM, the GNSS fix,

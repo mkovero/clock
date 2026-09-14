@@ -37,7 +37,7 @@
       <div class="card"><div class="label">sky view</div><div class="stat-value"><span id="used">—</span><small> / <span id="seen">—</span></small></div><div class="stat-note">satellites used / visible<br>PDOP <span id="pdop">—</span></div></div>
       <div class="card"><div class="label">reference oscillator</div><div class="stat-value"><span id="rbfreq">—</span> <small>ppb</small></div><div class="stat-note">AR-40A vs GNSS, uncertainty <span id="rbskew">—</span> ppb. The CM4 timebase is the rubidium, so Chrony&rsquo;s frequency estimate measures it directly. Costs <span id="rbholdover">—</span> µs/day of drift if GNSS is lost; <span id="rbturns">—</span> turns of 10 on the mechanical trim would null it.</div></div>
     </section>
-    <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-range="30m">30m</button><button data-range="1h">1h</button><button data-range="6h">6h</button><button class="active" data-range="24h">24h</button><button data-range="7d">7d</button><button data-range="30d">30d</button><button data-range="1y">1y</button><button id="custom-btn" type="button" aria-expanded="false">custom</button><button id="smooth-btn" title="Rolling median over the chart window. Median rather than mean: spikes are outliers, and a mean smears them across neighbouring samples instead of rejecting them.">median</button></div></div>
+    <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-range="30m">30m</button><button data-range="1h">1h</button><button data-range="6h">6h</button><button class="active" data-range="24h">24h</button><button data-range="7d">7d</button><button data-range="30d">30d</button><button data-range="1y">1y</button><button id="custom-btn" type="button" aria-expanded="false">custom</button><button id="smooth-btn" class="active" type="button" aria-pressed="true" title="Showing a rolling median so brief maintenance outliers do not flatten the useful scale. Select to show the raw samples.">smoothed</button></div></div>
     <form id="custom-range" class="custom-range" hidden><label>From<input id="range-from" type="datetime-local" step="60" required></label><label>To<input id="range-to" type="datetime-local" step="60" required></label><button type="submit">apply</button><button id="latest-btn" type="button">latest 24h</button></form>
     <section class="charts">
       <div class="card chart"><div class="label">PPS phase & stability · nanoseconds</div><canvas id="timing-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">offset</span><span class="key" style="--key:var(--mint)">1σ scatter</span></div></div>
@@ -60,8 +60,10 @@
 <script>
 const $=s=>document.querySelector(s), css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const RANGE_HOURS={"30m":.5,"1h":1,"6h":6,"24h":24,"7d":168,"30d":720,"1y":8760};
-let payload,rangeKey='24h',customStart=null,customEnd=null,chartStart,chartEnd,chartStartLabel,chartEndLabel,smooth=false;
-try{smooth=localStorage.getItem('clock-smooth')==='1'}catch{}
+let payload,rangeKey='24h',customStart=null,customEnd=null,chartStart,chartEnd,chartStartLabel,chartEndLabel,smooth=true;
+// New visitors get the readable trend. Keep an explicit raw-data choice across
+// visits so smoothing never makes the underlying measurements inaccessible.
+try{const saved=localStorage.getItem('clock-smooth');if(saved!==null)smooth=saved==='1'}catch{}
 const finite=v=>typeof v==='number'&&Number.isFinite(v), fmt=(v,d=0)=>finite(v)?v.toLocaleString(undefined,{maximumFractionDigits:d}):'—';
 const query=new URLSearchParams(location.search),queryFrom=Date.parse(query.get('from')),queryTo=Date.parse(query.get('to'));if(finite(queryFrom)&&finite(queryTo)&&queryFrom<queryTo){customStart=queryFrom;customEnd=queryTo}else if(RANGE_HOURS[query.get('range')])rangeKey=query.get('range');
 if(customStart!==null)$('#custom-range').hidden=false;
@@ -92,18 +94,26 @@ function lineChart(canvas, rows, series, scale='zero'){
 // archive gets a usable window, and let it grow with the span after that.
 function medianWindow(n){const w=Math.max(7,Math.round(n/16));return Math.min(41,w%2?w:w+1)}
 function medianRows(rows,keys,win){
-  const half=(win-1)/2;
-  return rows.map((row,i)=>{
-    const out={...row};
-    for(const key of keys){
-      const vals=[];
-      for(let j=Math.max(0,i-half);j<=Math.min(rows.length-1,i+half);j++){
-        const v=rows[j][key];if(finite(v))vals.push(v);
+  const out=rows.map(row=>({...row}));
+  for(const key of keys){
+    // Filter each uninterrupted run separately. Counting empty rows as part of
+    // the window made the filter collapse around maintenance outages, while
+    // filling those rows drew a plausible-looking line where no data existed.
+    let start=0;
+    while(start<rows.length){
+      while(start<rows.length&&!finite(rows[start][key]))start++;
+      let end=start;while(end<rows.length&&finite(rows[end][key]))end++;
+      const length=end-start;if(!length)break;
+      const width=Math.min(win,length%2?length:Math.max(1,length-1)),half=(width-1)/2;
+      for(let i=start;i<end;i++){
+        const first=Math.max(start,Math.min(i-half,end-width));
+        const vals=rows.slice(first,first+width).map(row=>row[key]).sort((a,b)=>a-b);
+        out[i][key]=vals[half];
       }
-      if(vals.length){vals.sort((a,b)=>a-b);out[key]=vals[(vals.length-1)>>1]}
+      start=end;
     }
-    return out;
-  });
+  }
+  return out;
 }
 function render(){
   const samples=payload.samples||[],latest=samples.at(-1);if(!latest){$('#empty').style.display='block';return}$('#content').hidden=false;
@@ -126,14 +136,14 @@ function render(){
     mikes2:finite(mikes[mikesNames[2]]?.offset_ns)?mikes[mikesNames[2]].offset_ns/1e3:undefined}});
   const keys=['pps_offset_ns','pps_stddev_ns','receiver_tacc_ns','sats_seen','sats_used','jam0','jam1','rbppb','mikes0','mikes1','mikes2'];
   const win=medianWindow(base.length),rows=smooth?medianRows(base,keys,win):base;
-  const btn=$('#smooth-btn');btn.classList.toggle('active',smooth);
-  let label='median';
+  const btn=$('#smooth-btn');btn.classList.toggle('active',smooth);btn.setAttribute('aria-pressed',String(smooth));
+  let label=smooth?'smoothed':'raw data';
   if(base.length>1){
     const spanMin=(new Date(base.at(-1).at)-new Date(base[0].at))/6e4;
     const winMin=Math.round(spanMin/(base.length-1)*win);
-    label+=winMin>=60?` · ${fmt(winMin/60,1)} h`:` · ${winMin} min`;
+    if(smooth)label+=winMin>=60?` · ${fmt(winMin/60,1)} h`:` · ${winMin} min`;
   }
-  btn.textContent=label;
+  btn.textContent=label;btn.title=smooth?'Showing a rolling median so brief maintenance outliers do not flatten the useful scale. Select to show the raw samples.':'Showing every recorded sample. Select to restore the rolling-median view.';
   lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],'symmetric');
   lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);
   lineChart($('#receiver-chart'),rows,[{key:'receiver_tacc_ns',color:css('--cyan'),points:true}]);
