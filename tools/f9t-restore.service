@@ -1,0 +1,21 @@
+# Installed as /etc/systemd/system/f9t-restore.service on aika.
+# At boot, and on demand with `sudo systemctl start f9t-restore`, put the ZED-F9T's timing
+# configuration back to ~/f9tcfg/f9t-known-good.txt in RAM. Only keys that differ are written.
+# For a check without writing run `f9t-restore --check`; to also fix Flash, `f9t-restore --persist`.
+[Unit]
+Description=Restore the ZED-F9T known-good timing configuration (RAM)
+After=gpsd.service gpsd-after-timesync.service
+Wants=gpsd.service
+ConditionPathExists=/home/mui/f9tcfg/f9t-known-good.txt
+
+[Service]
+Type=oneshot
+User=mui
+Environment=F9T_KNOWN_GOOD=/home/mui/f9tcfg/f9t-known-good.txt
+# The receiver and gpsd take a while after power-up; retry for up to 3 minutes.
+Environment=F9T_RESTORE_RETRIES=18
+ExecStart=/home/mui/bin/f9t-restore
+TimeoutStartSec=15min
+
+[Install]
+WantedBy=multi-user.target

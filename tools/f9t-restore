@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# f9t-restore — put the ZED-F9T back on its known-good timing configuration.
+#
+#   f9t-restore [--check | --persist] [keyfile]
+#
+# keyfile holds "<key> <value>" lines (default $F9T_KNOWN_GOOD, else
+# ~/f9tcfg/f9t-known-good.txt; the repo copy is config/f9t-known-good.txt).
+#
+#   --check    compare only. Exit 0 all match, 1 something differs, 2 receiver not readable
+#   (default)  write the keys that differ to RAM (layer 1), then read back and verify
+#   --persist  also compare the Flash layer, and write keys that differ in RAM or Flash to
+#              RAM + BBR + Flash (layer 7). ubx-apply-config compares RAM only, so it silently
+#              skips persisting a value RAM already holds; this does not.
+#
+# Gentle by design: every key is read before anything is written, and nothing is written
+# if any key cannot be read; only keys that differ are written, one at a time; UART1 baud
+# rate is never written, because changing it mid-run cuts the link. Runs at boot from
+# f9t-restore.service (RAM only) and on demand. F9T_RESTORE_RETRIES sets how many 10 s
+# attempts to make while gpsd or the receiver is still starting (default 1).
+
+set -uo pipefail
+
+MODE=ram
+FILE=
+for arg in "$@"; do
+	case "$arg" in
+		--check)   MODE=check ;;
+		--persist) MODE=persist ;;
+		-h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-*)        echo "unknown option: $arg" >&2; exit 2 ;;
+		*)         FILE=$arg ;;
+	esac
+done
+FILE=${FILE:-${F9T_KNOWN_GOOD:-$HOME/f9tcfg/f9t-known-good.txt}}
+RETRIES=${F9T_RESTORE_RETRIES:-1}
+
+export UBXOPTS="${UBXOPTS:--P 29.00}"
+# gpsd may have more than one device attached; ubxtool must name the receiver.
+F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
+
+if [ ! -r "$FILE" ]; then
+	echo "f9t-restore: keyfile $FILE not readable" >&2
+	exit 2
+fi
+
+exec 9>"${TMPDIR:-/tmp}/f9t-restore.lock"
+if ! flock -n 9; then
+	echo "f9t-restore: another run is in progress" >&2
+	exit 2
+fi
+
+declare -A WANT=()
+KEYS=()
+while read -r key val _rest; do
+	case "$key" in ''|\#*) continue ;; esac
+	[ -n "${val:-}" ] || continue
+	if [ "$key" = "CFG-UART1-BAUDRATE" ]; then
+		echo "f9t-restore: ignoring $key in $FILE (never written: it would cut the link)"
+		continue
+	fi
+	WANT[$key]=$val
+	KEYS+=("$key")
+done <"$FILE"
+[ "${#KEYS[@]}" -gt 0 ] || { echo "f9t-restore: no keys in $FILE" >&2; exit 2; }
+
+# Read keys from one layer (0 RAM, 2 Flash); prints "key value". ubxtool packs every -g of
+# one call into a single UBX-CFG-VALGET and refuses past 255 bytes ("trying to send 268
+# bytes, max is 255" for 64 keys, still exit 0), so read in chunks of 20.
+read_layer() {
+	local layer=$1 i k
+	shift
+	local keys=("$@")
+	for ((i = 0; i < ${#keys[@]}; i += 20)); do
+		local args=()
+		for k in "${keys[@]:i:20}"; do args+=(-g "$k,$layer"); done
+		timeout 60 ubxtool "${args[@]}" "$F9T_TARGET" 2>/dev/null
+	done | sed -nE 's/^ *item (CFG-[A-Z0-9_]+(-[A-Z0-9_]+)*)\/0x[0-9a-f]+ val (.*)$/\1 \3/p' | sort -u
+}
+
+declare -A RAM=() FLASH=()
+load() { # $1 layer, $2 name of assoc array to fill; returns number of keys missing
+	local layer=$1 k v missing=0
+	local -n dst=$2
+	dst=()
+	while read -r k v; do dst[$k]=$v; done < <(read_layer "$layer" "${KEYS[@]}")
+	for k in "${KEYS[@]}"; do [ -n "${dst[$k]+x}" ] || missing=$((missing + 1)); done
+	return "$missing"
+}
+
+layers="RAM"
+[ "$MODE" = persist ] && layers="RAM and Flash"
+echo "f9t-restore: $MODE, ${#KEYS[@]} keys from $FILE ($layers)"
+
+ok=0
+for ((try = 1; try <= RETRIES; try++)); do
+	load 0 RAM && { [ "$MODE" != persist ] || load 2 FLASH; } && { ok=1; break; }
+	[ "$try" -lt "$RETRIES" ] && sleep 10
+done
+if [ "$ok" != 1 ]; then
+	for k in "${KEYS[@]}"; do
+		[ -n "${RAM[$k]+x}" ] || echo "  unreadable in RAM:   $k"
+		[ "$MODE" != persist ] || [ -n "${FLASH[$k]+x}" ] || echo "  unreadable in Flash: $k"
+	done
+	echo "f9t-restore: receiver not readable through gpsd; nothing written"
+	exit 2
+fi
+
+DIFF=()
+for k in "${KEYS[@]}"; do
+	ram_bad=0 flash_bad=0
+	[ "${RAM[$k]}" = "${WANT[$k]}" ] || ram_bad=1
+	[ "$MODE" = persist ] && [ "${FLASH[$k]}" != "${WANT[$k]}" ] && flash_bad=1
+	if [ "$ram_bad" = 1 ] || [ "$flash_bad" = 1 ]; then
+		DIFF+=("$k")
+		if [ "$MODE" = persist ]; then
+			printf '  %-36s RAM %s, Flash %s, want %s\n' "$k" "${RAM[$k]}" "${FLASH[$k]}" "${WANT[$k]}"
+		else
+			printf '  %-36s RAM %s, want %s\n' "$k" "${RAM[$k]}" "${WANT[$k]}"
+		fi
+	fi
+done
+
+if [ "${#DIFF[@]}" -eq 0 ]; then
+	echo "f9t-restore: all ${#KEYS[@]} keys match known-good; nothing to do"
+	exit 0
+fi
+echo "f9t-restore: ${#DIFF[@]} of ${#KEYS[@]} keys differ"
+[ "$MODE" = check ] && exit 1
+
+wlayer=1
+[ "$MODE" = persist ] && wlayer=7
+for k in "${DIFF[@]}"; do
+	timeout 30 ubxtool -z "$k,${WANT[$k]},$wlayer" "$F9T_TARGET" >/dev/null 2>&1
+done
+
+RC=0
+declare -A AFTER=()
+local_keys=("${DIFF[@]}")
+KEYS=("${local_keys[@]}")
+load 0 AFTER
+declare -A AFTER_FLASH=()
+[ "$MODE" = persist ] && load 2 AFTER_FLASH
+for k in "${DIFF[@]}"; do
+	got=${AFTER[$k]:-?}
+	if [ "$MODE" = persist ]; then
+		gotf=${AFTER_FLASH[$k]:-?}
+		if [ "$got" = "${WANT[$k]}" ] && [ "$gotf" = "${WANT[$k]}" ]; then
+			printf '  %-36s set %s (RAM + Flash)\n' "$k" "${WANT[$k]}"
+		else
+			printf '  %-36s FAILED: want %s, RAM %s, Flash %s\n' "$k" "${WANT[$k]}" "$got" "$gotf"
+			RC=1
+		fi
+	elif [ "$got" = "${WANT[$k]}" ]; then
+		printf '  %-36s %s -> %s (RAM)\n' "$k" "${RAM[$k]}" "$got"
+	else
+		printf '  %-36s FAILED: want %s, reads %s\n' "$k" "${WANT[$k]}" "$got"
+		RC=1
+	fi
+done
+
+[ "$RC" = 0 ] && echo "f9t-restore: all writes verified" || echo "f9t-restore: SOME WRITES FAILED"
+exit "$RC"

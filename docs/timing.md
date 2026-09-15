@@ -117,6 +117,14 @@ page. See [dashboard/README.md](../dashboard/README.md).
   shows up in RINEX, probably a firmware limit, and it has been left alone.
 - The per-constellation `CFG-SIGNAL-*_ENA` master switches can read 1 even when every
   signal under them is 0. Check the individual signal keys.
+- **Known-good configuration.** `config/f9t-known-good.txt` holds the timing-critical keys
+  (time pulses, cable delay, fixed position, signals, RTCM off) as read back from a healthy
+  receiver. `f9t-restore --check` compares the receiver with it, `f9t-restore` writes back
+  whatever differs in RAM, and `f9t-restore --persist` also fixes Flash. On aika
+  `f9t-restore.service` does the RAM restore once per boot after gpsd, and `sudo systemctl
+  start f9t-restore` does it on demand. gpsd-managed message outputs and the UART1 baud rate
+  are left out on purpose: gpsd rewrites the former in RAM, and changing the latter mid-run
+  cuts the link.
 
 ### Files in `config/`
 
@@ -124,6 +132,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 |---|---|
 | `f9t-config-ram.txt`, `f9t-config-flash.txt` | full CFG dump from 2026-09-10, taken **before** the timing changes. 945 keys, restorable |
 | `f9t-timing-changes.txt` | changes applied since then, with reasons (`ubx-apply-config … 7`) |
+| `f9t-known-good.txt` | timing-critical keys read back from a healthy receiver on 2026-09-15 (RAM == Flash); used by `f9t-restore`. Copied to `~/f9tcfg/` on aika |
 | `survey-2026-09-11.meta` | standalone survey result, superseded by PPP |
 | `ppp-2026-09-12.sum`, `f9t-ppp-position.txt` | CSRS-PPP report and the TMODE keys written from it |
 | `f9t-reminders` | date-gated reminders shown by `gpsstat` |
@@ -197,6 +206,7 @@ for ubxtool.
 | `publish-clock-dashboard`, `clock-dashboard-askpass` | atomic SFTP publish of the dashboard |
 | `ubx-dump-config` | full CFG dump, RAM and Flash, paged |
 | `ubx-apply-config` | apply a key/value file and verify each write by reading it back |
+| `f9t-restore`, `f9t-restore.service` | compare the receiver with `f9t-known-good.txt` and write back only what differs: `--check`, RAM (default, also once per boot), `--persist` (RAM + BBR + Flash) |
 | `f9t-rawlog` | log RAWX/SFRBX for PPP without leaving fixed mode; checks UART margin first |
 | `f9t-ppp` | RAWX → RINEX via `convbin` for PPP submission |
 | `f9t-survey` | standalone position survey (rover mode), then write the result into TMODE |

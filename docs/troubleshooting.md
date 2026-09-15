@@ -17,7 +17,9 @@ to recognising them.
 | F9T silent on UART after rewiring the PPS | PPS coax shield bonded at both ends | lift the shield at the F9T end |
 | Arduino build: wall of `redefinition of …` | stray second `.ino` in the sketch folder, e.g. `foo.ino.ino` | delete it. The primary sketch must match the folder name |
 
-**Restore receiver configuration** from the dump with `ubx-apply-config` on a filtered
+**Restore the timing configuration** with `f9t-restore --check` to see what differs, then
+`f9t-restore` (RAM) or `f9t-restore --persist` (RAM + Flash); it only writes keys that differ.
+**Restore the full receiver configuration** from the dump with `ubx-apply-config` on a filtered
 copy of `config/f9t-config-ram.txt` (every line is `<key> <value>`), then re-apply
 `config/f9t-timing-changes.txt` and `config/f9t-ppp-position.txt`.
 
