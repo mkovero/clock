@@ -148,15 +148,32 @@ head_ "GNSS fix"
 # healthy system trains you to ignore it.
 if timeout 15 gpspipe -w -x 9 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.json" ]; then
 	TPV=$(jq -c 'select(.class=="TPV")' <"$TMP/gps.json" 2>/dev/null | tail -1)
-	SKY=$(jq -c 'select(.class=="SKY" and .uSat != null)' <"$TMP/gps.json" 2>/dev/null | tail -1)
+
+	# gpsd emits several kinds of SKY for the F9T, and which one arrives last in the
+	# window depends on the receiver's message set: NAV-PVT/DOP ones with uSat and DOPs
+	# but no satellite list, a NAV-SAT one with one entry per satellite, and, while
+	# NMEA GSV is on, a run of GSV-built ones with one entry per signal (L1/L2/E5b)
+	# that grow through the cycle and can repeat a constellation. Taking simply the
+	# last SKY with uSat read "0 seen / C/N0 0" whenever a list-less one came last
+	# (2026-09-15, after the F9T power cycle put NMEA back on). So: prefer the last
+	# per-satellite list, else any list, and collapse it to one entry per satellite.
+	SKYS=$(jq -c 'select(.class=="SKY" and ((.satellites // []) | length) > 0)' <"$TMP/gps.json" 2>/dev/null)
+	SKY=$(jq -c 'select([.satellites[] | select(.sigid != null)] | length == 0)' <<<"${SKYS:-}" 2>/dev/null | tail -1)
+	[ -n "${SKY:-}" ] || SKY=$(tail -1 <<<"${SKYS:-}")
+	DOPSKY=$(jq -c 'select(.class=="SKY" and .pdop != null)' <"$TMP/gps.json" 2>/dev/null | tail -1)
+	SATS=$(jq -c '[.satellites[]? | {k: [(.gnssid // 0), .svid], used: (.used == true), ss: (.ss // 0)}]
+	              | group_by(.k) | map({gnssid: .[0].k[0], used: (map(.used) | any), ss: (map(.ss) | max)})' \
+	          <<<"${SKY:-\{\}}" 2>/dev/null)
 
 	MODE=$(jq -r '.mode // 0'   <<<"${TPV:-\{\}}" 2>/dev/null)
 	GTIME=$(jq -r '.time // "-"' <<<"${TPV:-\{\}}" 2>/dev/null)
 	LEAPS=$(jq -r '.leapseconds // "-"' <<<"${TPV:-\{\}}" 2>/dev/null)
-	USAT=$(jq -r '.uSat // 0'   <<<"${SKY:-\{\}}" 2>/dev/null)
-	NSAT=$(jq -r '.nSat // 0'   <<<"${SKY:-\{\}}" 2>/dev/null)
-	PDOP=$(jq -r '.pdop // "-"' <<<"${SKY:-\{\}}" 2>/dev/null)
-	TDOP=$(jq -r '.tdop // "-"' <<<"${SKY:-\{\}}" 2>/dev/null)
+	USAT=$(jq -r 'map(select(.used)) | length' <<<"${SATS:-[]}" 2>/dev/null)
+	NSAT=$(jq -r 'length' <<<"${SATS:-[]}" 2>/dev/null)
+	# No satellite list at all: fall back to the PVT count so the used-satellites check still runs.
+	[ "${NSAT:-0}" -gt 0 ] || USAT=$(jq -r '.uSat // 0' <<<"${DOPSKY:-\{\}}" 2>/dev/null)
+	PDOP=$(jq -r '.pdop // "-"' <<<"${DOPSKY:-\{\}}" 2>/dev/null)
+	TDOP=$(jq -r '.tdop // "-"' <<<"${DOPSKY:-\{\}}" 2>/dev/null)
 
 	printf '  time %s | leap %s | sats %s used / %s seen | PDOP %s TDOP %s\n' \
 		"$GTIME" "$LEAPS" "$USAT" "$NSAT" "$PDOP" "$TDOP"
@@ -173,8 +190,8 @@ if timeout 15 gpspipe -w -x 9 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.jso
 				6) gname=GLONASS ;; *) gname="gnss$gid" ;;
 			esac
 			CONST="$CONST  $gname $n"
-		done < <(jq -r '[.satellites[]? | select(.used==true) | .gnssid // 0]
-		                | group_by(.) | map("\(.[0]):\(length)") | .[]' <<<"$SKY" 2>/dev/null)
+		done < <(jq -r 'map(select(.used)) | group_by(.gnssid)
+		                | map("\(.[0].gnssid):\(length)") | .[]' <<<"$SATS" 2>/dev/null)
 		printf '  constellations in solution:%s\n' "${CONST:-  none}"
 	fi
 
@@ -198,8 +215,8 @@ if timeout 15 gpspipe -w -x 9 >"$TMP/gps.json" 2>/dev/null && [ -s "$TMP/gps.jso
 	# before the fix goes: the threshold sits just under the healthy range rather
 	# than down at indoor-antenna levels.
 	if [ -n "${SKY:-}" ]; then
-		CN0=$(jq -r '[.satellites[]? | select(.used==true) | .ss] | sort | reverse | .[0:4] | map(tostring) | join(" ")' <<<"$SKY" 2>/dev/null)
-		BEST=$(jq -r '[.satellites[]? | select(.used==true) | .ss] | max // 0' <<<"$SKY" 2>/dev/null)
+		CN0=$(jq -r '[.[] | select(.used) | .ss] | sort | reverse | .[0:4] | map(tostring) | join(" ")' <<<"$SATS" 2>/dev/null)
+		BEST=$(jq -r '[.[] | select(.used) | .ss] | max // 0' <<<"$SATS" 2>/dev/null)
 		printf '  best C/N0 (used): %s dB-Hz\n' "${CN0:-?}"
 		awk -v b="${BEST:-0}" 'BEGIN{exit !(b>=40)}' && ok "signal level healthy" \
 			|| warn "peak C/N0 ${BEST} dB-Hz is low — jamming, or antenna/cable fault"
