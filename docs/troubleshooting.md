@@ -9,7 +9,7 @@ to recognising them.
 |---|---|---|
 | CM4 power and green LEDs lit, no activity flicker | no valid 54 MHz at XIN | check the panel REF LED and Teensy status. See [no reference](#no-reference-at-the-si5351) |
 | `rpiboot` enumerates the eMMC | nothing wrong with the clock: the boot ROM runs off XIN, so the whole clock chain is good | look elsewhere |
-| `eth0 failed to connect PHY` or any other kernel message | the CM4 **did** boot | check the Ethernet cable and the network |
+| `eth0 failed to connect PHY` or any other kernel message | the CM4 **did** boot | see [PHY missing after a warm reboot](#phy-missing-after-a-warm-reboot) |
 | CM4 always comes up in USB boot mode | J2 1–2 (`nRPI_BOOT`) jumper left on | remove it |
 | `chronyc tracking` looks healthy at stratum 3, refclocks `Reach 0` | gpsd has stopped writing SHM(0) | `sudo systemctl restart gpsd`. See [dead RTC](#dead-rtc--gpsd--chrony) |
 | Stratum 1 with tiny offset, but ~0.5 s off UTC (MIKES disagrees) | NMEA arrives too late, so pulses are numbered to the wrong second | reduce UART1 load. See [UART bandwidth](#uart-bandwidth-is-a-correctness-constraint) |
@@ -22,6 +22,31 @@ to recognising them.
 **Restore the full receiver configuration** from the dump with `ubx-apply-config` on a filtered
 copy of `config/f9t-config-ram.txt` (every line is `<key> <value>`), then re-apply
 `config/f9t-timing-changes.txt` and `config/f9t-ppp-position.txt`.
+
+## PHY missing after a warm reboot
+
+*2026-09-15.* After a reboot the CM4 can come up with no Ethernet at all:
+
+```
+mdio_bus unimac-mdio--19: MDIO device at address 0 is missing.
+could not attach to PHY
+bcmgenet fd580000.ethernet eth0: failed to connect to PHY
+```
+
+The rest of the system boots normally; there is simply no network, and with no console login the box is
+unreachable. Observed on several kernels, so it is not a kernel regression.
+
+- **Trigger:** warm reboots. Cold boots have not failed.
+- **Recovery:** switch the **whole 5 V supply** off for ~30 s (leave the rubidium's 15 V on), then on. A power cycle
+  of the CM4 alone is not reliable, and neither is another reboot.
+- **Why:** the BCM54210PE has no reset line that a warm reboot asserts, and the PHY driver writes `BMCR_PDOWN` when
+  the interface goes down, so the next kernel has to wake a PHY that may no longer answer MDIO. The exact mechanism
+  is still open; upstream tracks the same signature in
+  [raspberrypi/linux#5497](https://github.com/raspberrypi/linux/issues/5497).
+- **Ruled out here:** the GNSS PPS on the PHY's SYNC pin, back-powering of the CM4 from the other 5 V devices
+  (3V3 measures 28 mV with the CM4's own feed removed), and the `brcm,powerdown-enable` device-tree property.
+
+Plan reboots of the timing host for when someone can power-cycle the rig.
 
 ## Dead RTC → gpsd → chrony
 

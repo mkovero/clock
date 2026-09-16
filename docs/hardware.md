@@ -150,7 +150,10 @@ far less phase noise and is the right input.
 - **The PPS goes to pin 9 (`SYNC_OUT`).** The label describes the PHY's role in a 1588
   network. The driver exposes one PTP pin, `/sys/class/ptp/ptp0/pins/SYNC_OUT` = `1 0`
   (EXTTS, channel 0). Pin 8 is reportedly miswired on the CM4IO.
-- **PHY:** BCM54210PE with hardware TX/RX timestamping. PHC `/dev/ptp0` is `bcm_phy_ptp`.
+- **PHY:** BCM54210PE with hardware TX/RX timestamping. PHC `/dev/ptp0` is `bcm_phy_ptp`. It has **no interrupt
+  line and no reset line** that a warm reboot asserts, so it keeps whatever state the previous kernel left. After a
+  warm reboot it sometimes stops answering MDIO and the CM4 comes up with no Ethernet; only removing power from the
+  whole 5 V supply reliably clears it ([troubleshooting](troubleshooting.md#phy-missing-after-a-warm-reboot)).
 - **RTC:** PCF85063 at I²C `10-0051` (`dtoverlay=i2c-rtc,pcf85063a`). It had no backup
   cell ([troubleshooting](troubleshooting.md#dead-rtc--gpsd--chrony)).
 - **`config.txt` settings that matter:** `dtoverlay=disable-bt` (puts the PL011 on
