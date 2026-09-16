@@ -42,9 +42,10 @@ board ground to act as the signal return.
 - **Isolate the Si5351 enclosure's BNC input from the enclosure.** Bond the shield to the
   board ground pour only.
 - **Keep the PPS shield single-ended.** When it was bonded at the F9T end as well as at J2,
-  the F9T stopped responding on its UART, and lifting that end restored it at once. Ground
-  difference with the single bond is <10 mV, so the mechanism is unexplained. Don't
-  reintroduce the bond.
+  **the F9T froze outright** — no PPS, no UART — and lifting that end restored it at once.
+  Ground difference with the single bond is <10 mV, so the mechanism is unexplained. Don't
+  reintroduce the bond. The CM4 boots from the Si5351's 54 MHz, not from anything the F9T
+  provides, so this does not stop the CM4 coming up; it takes the time reference away.
 - **Keep the LED strand shield off the chassis.** It is a conductor (the common cathode
   return), not a screen.
 - **Never lift a safety earth.**

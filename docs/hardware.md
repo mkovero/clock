@@ -194,5 +194,5 @@ Do not "fix" these without a reason:
 |---|---|
 | Full-swing CMOS 54 MHz into CM4 XIN | Stable for years. Changing it needs a spare CM4 to experiment on |
 | Zero-centred sine clamped at Si5351 CLKIN | Works. Fixed properly only by the timing board's biased comparator input |
-| PPS coax shield bonded at one end only | Bonding both ends stopped the F9T responding ([grounding](grounding.md)) |
+| PPS coax shield bonded at one end only | Bonding both ends froze the F9T completely, no PPS and no UART ([grounding](grounding.md)) |
 | AR-40A frequency offset left untrimmed | chrony corrects it, and trimming would restart the aging record (plan.md Step 3b) |
