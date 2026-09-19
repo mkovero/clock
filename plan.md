@@ -70,53 +70,52 @@ position belongs in git.
 
 ---
 
-## Step 2 — DONE 2026-09-12, and worth resubmitting
+## Step 2 — DONE 2026-09-12, resubmitted 2026-09-19 on rapid products
 
-23.2 h of RAWX, 2784 epochs at 30 s with no gaps, through NRCan CSRS-PPP. Written
-to Flash and verified; report kept as `config/ppp-2026-09-12.sum`, keys as
-`config/f9t-ppp-position.txt`.
-
-```
-lat 60.179598272   lon 24.958742464   hgt 21.2083 m ellipsoidal (ITRF20)
-sigma 0.41 m 3D (1 sigma)  ->  1.35 ns        FIXED_POS_ACC 4103
-```
-
-That is 2.22 m from the 2026-09-11 standalone survey, which had claimed 1.43 m —
-so 1.6 sigma out, meaning the survey's own uncertainty estimate was honest if
-slightly optimistic. Position-induced bias improves from roughly 4.7 ns to 1.35 ns.
-
-**Resubmit the same file — but sooner than two weeks.** That figure was the
-*final*-product latency, and it is the wrong advice for the first resubmit. The
-submission went in two hours after the observation ended, so only the lowest
-product tier existed:
-
-| Product | Latency | What it buys |
-|---|---|---|
-| ultra-rapid | real-time / 6 h | what this run got: no Galileo, IAR failed |
-| **rapid** | **~1-2 days** | Galileo included, far better orbits and clocks, IAR should fix |
-| final | ~12-18 days | the last increment, fully reprocessed |
-
-The error was specific — *no **ultra-rapid** Galileo products* — so rapid and final
-both carry Galileo. Most of the gain is available within a couple of days; final
-products are worth one more pass afterwards if the last increment matters.
-
-Reminders for both are in `config/f9t-reminders` and surface through `gpsstat` on
-the dashboard, so they do not depend on anyone remembering.
-
-The solution is decimetre rather than centimetre only because of what was
-available a day after observing:
+23.2 h of RAWX at 30 s through NRCan CSRS-PPP. The rapid-product run is what the
+receiver now holds, written to Flash and verified 2026-09-19. Reports kept as
+`config/ppp-2026-09-12.sum` (ultra-rapid) and `config/ppp-2026-09-12-rapid.sum`,
+keys as `config/f9t-ppp-position.txt` and again in `config/f9t-known-good.txt`.
 
 ```
-IAR GPS 0.00%        ambiguity resolution failed; float solution only
-Galileo dropped      no ultra-rapid Galileo products exist
-EMR1DCBULT           ultra-rapid orbits and clocks, the least accurate tier
-ANT NOT FOUND        no antenna phase-centre model
+lat 60.179598658   lon 24.958725025   hgt 22.0279 m ellipsoidal (ITRF20)
+sigma 0.38 m 3D (1 sigma, east widened)  ->  1.28 ns     FIXED_POS_ACC 3840
 ```
 
-Final products fix the first three, and the file is already on hand at
-`~/ppp/aika-20260912-0942.obs.gz`. The fourth matters less than it reads: a timing
-receiver in TMODE fixed computes ranges to the antenna phase centre, so an
-uncorrected APC position is the self-consistent choice here.
+**The first run was weaker than this plan said.** Its `EPO 410 2769 2787` line
+means 410 epochs processed out of 2769, about 3.4 h, not the 23.2 h claimed here.
+The rapid run processed 2768 and landed 1.27 m away — 0.04 m N, 0.97 m W, 0.82 m
+up — which is 5.7 of the first run's own east sigmas. Its 0.41 m was not honest.
+
+**The resubmit did not deliver what this plan promised either.** Rapid products
+were supposed to bring Galileo and fix ambiguities. What came back:
+
+```
+IAR GPS 0.00%        still float
+IAR GAL OFF          Galileo in, but E1 only; CSRS-PPP does not take the F9T's E5b,
+                     and the E1 code residual is 30 m RMS
+ANT NOT FOUND        no antenna phase-centre model (harmless, see below)
+```
+
+The limit is the data, not the products. 47% of GPS and 48% of Galileo
+observations in the RINEX carry no L1 carrier phase, all of them weak signals:
+mean 24 dB-Hz, against 41 dB-Hz where phase is present. Only 7655 of 24177 GPS
+observations are fully dual-frequency and CSRS used 7253 of them, about 2.6 GPS
+satellites per epoch. CSRS gives
+0.19 m 3D, but from 17:00 on the first day the forward filter still wanders 0.69 m
+east while holding 0.33 m north and 0.23 m up, so east is carried as 0.35 m and
+the position as 0.38 m.
+
+Final products (~2026-09-30) are an optional pass and should move little. What
+would help is sky view: a new 24 h log after any antenna improvement is worth more
+than any reprocessing of this one.
+
+> **Trap:** `f9t-restore` runs at boot from `config/f9t-known-good.txt`, which
+> carries the TMODE keys too. Change the position in one file and not the other and
+> the next boot quietly puts the old one back.
+
+On ANT NOT FOUND: a timing receiver in TMODE fixed computes ranges to the antenna
+phase centre, so an uncorrected APC position is the self-consistent choice here.
 
 **Correction to an earlier claim in this plan: PPP does not yield the absolute PPS
 bias.** The clock output is the receiver's own free-running TCXO — `OFF

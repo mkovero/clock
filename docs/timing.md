@@ -102,7 +102,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | Setting | Value |
 |---|---|
 | Mode | `CFG-TMODE-MODE=2`, fixed LLA |
-| Position | 60.179598272°, 24.958742464°, 21.2083 m ellipsoidal (ITRF20). PPP 2026-09-12, 0.41 m 3D (1σ) ≈ 1.35 ns. Keys in `config/f9t-ppp-position.txt` |
+| Position | 60.179598658°, 24.958725025°, 22.0279 m ellipsoidal (ITRF20). PPP on rapid products, written 2026-09-19, 0.38 m 3D (1σ, east widened) ≈ 1.28 ns. Keys in `config/f9t-ppp-position.txt` and `config/f9t-known-good.txt` |
 | Time pulse | TP2 1 Hz, 50% duty, `USE_LOCKED_TP2=1`, locked-only since 2026-09-14 |
 | Cable delay | `CFG-TP-ANT_CABLEDELAY=40` ns (8 m ÷ (0.66 c) = 40.4 ns). Excludes LNA and receiver delay |
 | Signals | GPS L1C/A + L2C, Galileo E1 + E5b, BeiDou B1I + B2I |
@@ -134,7 +134,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | `f9t-timing-changes.txt` | changes applied since then, with reasons (`ubx-apply-config … 7`) |
 | `f9t-known-good.txt` | timing-critical keys read back from a healthy receiver on 2026-09-15 (RAM == Flash); used by `f9t-restore`. Copied to `~/f9tcfg/` on aika |
 | `survey-2026-09-11.meta` | standalone survey result, superseded by PPP |
-| `ppp-2026-09-12.sum`, `f9t-ppp-position.txt` | CSRS-PPP report and the TMODE keys written from it |
+| `ppp-2026-09-12.sum`, `ppp-2026-09-12-rapid.sum`, `f9t-ppp-position.txt` | CSRS-PPP reports (ultra-rapid, then rapid) and the TMODE keys written from the rapid one |
 | `f9t-reminders` | date-gated reminders shown by `gpsstat` |
 
 ## Bias and error budget
@@ -157,7 +157,7 @@ laboratory.
 | Term | Size | Status |
 |---|---|---|
 | Antenna cable delay | 35 ns | corrected (5 → 40 ns), calculated not measured |
-| Stored position | 1.35 ns | PPP 2026-09-12 (was ~19 ns after the antenna move) |
+| Stored position | 1.28 ns | PPP on rapid products, 2026-09-19 (was ~19 ns after the antenna move) |
 | Antenna LNA group delay | typically 10–30 ns | uncompensated, not measurable on the rig |
 | Receiver internal delay | unknown | uncompensated, not measurable on the rig |
 | chrony PPS2 jitter | 20–60 ns | random, averages out |
@@ -191,8 +191,8 @@ gpsd quirks found along the way, encoded in `tools/ntrip-relay`:
 Restructuring so the relay owns the port is not worth it for a 0.5 m service.
 
 **PPP** (RAWX → RINEX → NRCan CSRS-PPP) gave the stored position, using precise orbit and
-clock products with no dependence on another receiver's clock. Resubmitting against
-rapid and final products is tracked in plan.md and `config/f9t-reminders`.
+clock products with no dependence on another receiver's clock. The rapid-product rerun
+of 2026-09-19 is the one in Flash; it is still a float solution, and plan.md Step 2 says why.
 
 ## Tools
 
