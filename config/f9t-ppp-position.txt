@@ -32,8 +32,10 @@
 # The limit is the data, not the products. 47% of GPS and 48% of Galileo
 # observations carry no L1 carrier phase in the RINEX, all of them weak signals
 # (mean 24 dB-Hz against 41 dB-Hz where phase is present), leaving 7655 of 24177
-# GPS observations fully dual-frequency. Final products will not fix that; a
-# better sky view would.
+# GPS observations fully dual-frequency. tools/f9t-skymap shows where they go
+# missing: the half of the sky from N clockwise to SSE yields 0-2% phase at every
+# elevation. That is also why east is the weak axis above — east is the blocked
+# side. Final products will not fix it; see docs/hardware.md.
 #
 # ANT NOT FOUND matters less than it sounds. A timing receiver in TMODE fixed
 # computes ranges to the antenna phase centre, so the uncorrected APC position is

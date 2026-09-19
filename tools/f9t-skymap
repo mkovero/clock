@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""f9t-skymap — map C/N0 and carrier-phase yield across the sky from a PPP RINEX pair.
+
+    f9t-skymap <obs[.gz]> <nav> [lat lon hgt]
+
+Live SKY messages from gpsd only ever show the satellites that are up right now,
+so a snapshot cannot tell a blocked azimuth from an empty one. A RINEX pair from
+f9t-rawlog covers a whole day, by which time every azimuth has been crossed many
+times, and the broadcast ephemeris in the .nav file gives the azimuth and
+elevation each observation was made at. Binning the observations by where they
+came from turns the log into a map of what the antenna can actually see.
+
+Two numbers per cell:
+
+  mean C/N0        how strong the signal is
+  phase yield      the share of observations that carry L1 carrier phase
+
+Phase yield is the one that matters for PPP. Code-only observations are metres
+wide; a PPP solution is carried by carrier phase, and it cannot fix ambiguities
+in a part of the sky that never delivers any. A cell can sit at a usable-looking
+C/N0 and still be worthless at 0% yield.
+
+The default position is the one in config/f9t-ppp-position.txt. It only has to be
+good to a few metres — az/el is not sensitive to it.
+"""
+
+import collections
+import datetime as dt
+import gzip
+import math
+import sys
+
+MU = {"G": 3.986005e14, "E": 3.986004418e14}
+OMEGA_E = 7.2921151467e-5
+DEFAULT_POS = (60.179598658, 24.958725025, 22.0279)
+
+
+def fortran(s):
+    s = s.strip().replace("D", "E").replace("d", "E")
+    return float(s) if s else 0.0
+
+
+def read_nav(path):
+    """Broadcast ephemeris, keyed by satellite. GPS and Galileo share this layout."""
+    eph = collections.defaultdict(list)
+    lines = open(path).readlines()
+    i = 0
+    while i < len(lines) and "END OF HEADER" not in lines[i]:
+        i += 1
+    i += 1
+    while i < len(lines):
+        ln = lines[i]
+        if len(ln) < 23 or ln[0] not in "GE":
+            i += 1
+            continue
+        toc = dt.datetime(int(ln[4:8]), int(ln[9:11]), int(ln[12:14]),
+                          int(ln[15:17]), int(ln[18:20]), int(ln[21:23]),
+                          tzinfo=dt.timezone.utc)
+        # Seven BROADCAST ORBIT lines, four 19-char fields each, starting at column 4.
+        # The SV clock line is deliberately not collected, so vals[0] is IODE/IODnav.
+        vals = []
+        for k in range(1, 8):
+            if i + k >= len(lines):
+                break
+            row = lines[i + k].rstrip("\n")
+            for c in range(4, 80, 19):
+                if row[c:c + 19].strip():
+                    vals.append(fortran(row[c:c + 19]))
+        if len(vals) >= 17:
+            eph[ln[0:3]].append(dict(
+                toc=toc, crs=vals[1], dn=vals[2], m0=vals[3], cuc=vals[4],
+                ecc=vals[5], cus=vals[6], sqrta=vals[7], toe=vals[8], cic=vals[9],
+                omega0=vals[10], cis=vals[11], i0=vals[12], crc=vals[13],
+                omega=vals[14], omegadot=vals[15], idot=vals[16]))
+        i += 8
+    return eph
+
+
+def sat_ecef(e, tow, sys):
+    """Kepler orbit from broadcast elements. No light-time correction: it moves a
+    satellite under 300 m, which is far below the 30-degree azimuth bins."""
+    a = e["sqrta"] ** 2
+    tk = tow - e["toe"]
+    tk -= 604800 * round(tk / 604800)
+    m = e["m0"] + (math.sqrt(MU[sys] / a ** 3) + e["dn"]) * tk
+    ea = m
+    for _ in range(12):
+        ea = m + e["ecc"] * math.sin(ea)
+    v = math.atan2(math.sqrt(1 - e["ecc"] ** 2) * math.sin(ea), math.cos(ea) - e["ecc"])
+    phi = v + e["omega"]
+    s2, c2 = math.sin(2 * phi), math.cos(2 * phi)
+    u = phi + e["cus"] * s2 + e["cuc"] * c2
+    r = a * (1 - e["ecc"] * math.cos(ea)) + e["crs"] * s2 + e["crc"] * c2
+    inc = e["i0"] + e["cis"] * s2 + e["cic"] * c2 + e["idot"] * tk
+    xp, yp = r * math.cos(u), r * math.sin(u)
+    om = e["omega0"] + (e["omegadot"] - OMEGA_E) * tk - OMEGA_E * e["toe"]
+    return (xp * math.cos(om) - yp * math.cos(inc) * math.sin(om),
+            xp * math.sin(om) + yp * math.cos(inc) * math.cos(om),
+            yp * math.sin(inc))
+
+
+def llh_ecef(lat, lon, h):
+    a, f = 6378137.0, 1 / 298.257223563
+    e2 = f * (2 - f)
+    la, lo = math.radians(lat), math.radians(lon)
+    n = a / math.sqrt(1 - e2 * math.sin(la) ** 2)
+    return ((n + h) * math.cos(la) * math.cos(lo),
+            (n + h) * math.cos(la) * math.sin(lo),
+            (n * (1 - e2) + h) * math.sin(la))
+
+
+def main():
+    args = sys.argv[1:]
+    if len(args) < 2:
+        sys.exit(__doc__.strip().splitlines()[2].strip())
+    obs_path, nav_path = args[0], args[1]
+    lat, lon, hgt = (tuple(float(x) for x in args[2:5]) if len(args) >= 5 else DEFAULT_POS)
+
+    rx = llh_ecef(lat, lon, hgt)
+    sla, slo = math.radians(lat), math.radians(lon)
+
+    def azel(s):
+        dx, dy, dz = s[0] - rx[0], s[1] - rx[1], s[2] - rx[2]
+        e = -math.sin(slo) * dx + math.cos(slo) * dy
+        n = (-math.sin(sla) * math.cos(slo) * dx - math.sin(sla) * math.sin(slo) * dy
+             + math.cos(sla) * dz)
+        u = (math.cos(sla) * math.cos(slo) * dx + math.cos(sla) * math.sin(slo) * dy
+             + math.sin(sla) * dz)
+        return math.degrees(math.atan2(e, n)) % 360, math.degrees(math.atan2(u, math.hypot(e, n)))
+
+    eph = read_nav(nav_path)
+    if not eph:
+        sys.exit("no ephemeris read from %s" % nav_path)
+
+    def pick(sat, t):
+        best, bd = None, 1e18
+        for e in eph.get(sat, []):
+            d = abs((t - e["toc"]).total_seconds())
+            if d < bd:
+                best, bd = e, d
+        return best if bd < 7200 else None
+
+    cells = collections.defaultdict(lambda: {"n": 0, "ss": 0.0, "ph": 0})
+    prof = collections.defaultdict(lambda: {"n": 0, "ss": 0.0, "ph": 0})
+    order, cur, nep, skipped = {}, None, 0, 0
+
+    opener = gzip.open if obs_path.endswith(".gz") else open
+    with opener(obs_path, "rt") as fh:
+        inhdr = True
+        for ln in fh:
+            if inhdr:
+                if "SYS / # / OBS TYPES" in ln and ln[0] in "GE":
+                    order[ln[0]] = ln[7:60].split()
+                elif "END OF HEADER" in ln:
+                    inhdr = False
+                continue
+            if ln.startswith(">"):
+                p = ln.split()
+                cur = dt.datetime(int(p[1]), int(p[2]), int(p[3]), int(p[4]), int(p[5]),
+                                  int(float(p[6])), tzinfo=dt.timezone.utc)
+                nep += 1
+                continue
+            if not cur or not ln or ln[0] not in "GE":
+                continue
+            e = pick(ln[0:3], cur)
+            if not e:
+                skipped += 1
+                continue
+            tow = ((cur.weekday() + 1) % 7 * 86400
+                   + cur.hour * 3600 + cur.minute * 60 + cur.second)
+            az, el = azel(sat_ecef(e, tow, ln[0]))
+            if el < 0:
+                continue
+            f = {}
+            for k, t in enumerate(order.get(ln[0], [])):
+                c = ln[3 + 16 * k:3 + 16 * k + 14]
+                f[t] = float(c) if c.strip() else 0.0
+            for d, key in ((cells, (int(az // 30) * 30, min(int(el // 15) * 15, 75))),
+                           (prof, min(int(el // 10) * 10, 80))):
+                c = d[key]
+                c["n"] += 1
+                c["ss"] += f.get("S1C", 0.0)
+                c["ph"] += 1 if f.get("L1C", 0.0) else 0
+
+    binned = sum(c["n"] for c in cells.values())
+    print("%d epochs, %d observations binned, %d without usable ephemeris"
+          % (nep, binned, skipped))
+    compass = ["N", "NNE", "ENE", "E", "ESE", "SSE", "S", "SSW", "WSW", "W", "WNW", "NNW"]
+
+    def grid(title, fmt):
+        print()
+        print(title)
+        print("        " + "".join("%6d" % a for a in range(0, 360, 30)))
+        for elb in range(75, -1, -15):
+            row = "el %2d+ " % elb
+            for a in range(0, 360, 30):
+                c = cells.get((a, elb))
+                row += "%6s" % (fmt(c) if c and c["n"] > 30 else ".")
+            print(row)
+        print("        " + "".join("%6s" % s for s in compass))
+
+    grid("mean C/N0 (dB-Hz), GPS+Galileo L1",
+         lambda c: "%.0f" % (c["ss"] / c["n"]))
+    grid("carrier-phase yield (% of observations carrying L1 phase)",
+         lambda c: "%.0f" % (100.0 * c["ph"] / c["n"]))
+
+    print()
+    print("elevation profile, all azimuths:")
+    for b in sorted(prof):
+        p = prof[b]
+        print("  el %2d-%2d  n=%6d  mean C/N0 %4.1f  phase %3.0f%%"
+              % (b, b + 9, p["n"], p["ss"] / p["n"], 100.0 * p["ph"] / p["n"]))
+
+
+if __name__ == "__main__":
+    main()

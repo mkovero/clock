@@ -192,7 +192,10 @@ Restructuring so the relay owns the port is not worth it for a 0.5 m service.
 
 **PPP** (RAWX → RINEX → NRCan CSRS-PPP) gave the stored position, using precise orbit and
 clock products with no dependence on another receiver's clock. The rapid-product rerun
-of 2026-09-19 is the one in Flash; it is still a float solution, and plan.md Step 2 says why.
+of 2026-09-19 is the one in Flash. It is still a float solution, and the reason is the
+antenna's sky, not the products: half the sky returns no carrier phase at all
+([hardware](hardware.md#what-the-antenna-can-actually-see)). `tools/f9t-skymap` measures
+this from any RAWX log and is the way to tell whether moving the antenna helped.
 
 ## Tools
 

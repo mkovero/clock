@@ -106,9 +106,20 @@ satellites per epoch. CSRS gives
 east while holding 0.33 m north and 0.23 m up, so east is carried as 0.35 m and
 the position as 0.38 m.
 
-Final products (~2026-09-30) are an optional pass and should move little. What
-would help is sky view: a new 24 h log after any antenna improvement is worth more
-than any reprocessing of this one.
+Final products (~2026-09-30) are an optional pass and should move little.
+
+**What is actually in the way is the antenna's sky**, measured 2026-09-19 with
+`tools/f9t-skymap` and written up in
+[hardware](docs/hardware.md#what-the-antenna-can-actually-see). The half of the sky
+from N clockwise to SSE returns 0-2% carrier phase at every elevation, so no product
+tier can resolve ambiguities from this log, and the east coordinate is the weak axis
+because east is the blocked side. Gain peaks at 15-45 degrees elevation toward WSW
+rather than at zenith, which is what a tilted antenna looks like — check the mount
+before spending another observation.
+
+Anything that changes the antenna needs a fresh 24 h RAWX log and a re-run of
+`f9t-skymap`; that is the measurement that says whether it helped. A multi-day log
+would also buy geometry, but only after the sky itself is as good as it will get.
 
 > **Trap:** `f9t-restore` runs at boot from `config/f9t-known-good.txt`, which
 > carries the TMODE keys too. Change the position in one file and not the other and

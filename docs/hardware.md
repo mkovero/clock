@@ -166,7 +166,7 @@ Software is described in [timing.md](timing.md).
 
 - **I/O is 3.3 V.** The CM4 decodes its TX cleanly.
 - **Data:** UART1 ↔ CM4 GPIO14/15. F9T TX → header pin 10, header pin 8 → F9T RX. The
-  port is `/dev/ttyAMA0` at **115200** (since 2026-09-11). USB is not used for two
+  port is `/dev/ttyAMA0` at **460800** (since 2026-09-19). USB is not used for two
   reasons: the breakout ties header +5V to VBUS, so a cable would parallel the supplies,
   and CM4 USB sits behind the VL805 on PCIe. Don't hand-wire the USB D+/D− header pins.
 - **1 PPS:** TIME2 → CM4 J2 pin 9 over miniature coax with 47 Ω in series at the F9T
@@ -185,6 +185,38 @@ Software is described in [timing.md](timing.md).
 - **Cable temperature:** PTFE coax (RG-178, RG-316) steps its delay by a few hundred ppm
   around 19–21 °C. PE is better through room temperature. This matters most on the
   antenna feed.
+
+### What the antenna can actually see
+
+Measured 2026-09-19 with `tools/f9t-skymap` over the 23 h RAWX log of 2026-09-11/12.
+Carrier-phase yield is the share of observations carrying L1 phase; PPP is carried by
+phase, so a cell at 0% contributes nothing but code.
+
+```
+carrier-phase yield (%)        mean C/N0 (dB-Hz)
+        E ESE SSE  S SSW  W          E ESE SSE  S SSW  W
+el 60+  0   1   9 31  55 73         20  19  23 27  30 33
+el 30+  0   1  18 69  97 99         22  20  25 32  42 44
+el 15+  2   2   8 78  95 97         19  20  22 35  41 45
+```
+
+**The sky is split down the middle.** Everything from N clockwise to SSE is 14–25 dB-Hz
+at 0–2% phase yield; everything from S clockwise to NNW is 25–45 dB-Hz at 60–99%. The
+useful sky is a wedge centred on WSW.
+
+**The cut does not depend on elevation**, which is what rules out an ordinary horizon
+obstruction: a building that blocks 75° elevation would have to be directly overhead.
+Attenuation of 15–20 dB across a whole hemisphere at every elevation means something
+immediately beside the antenna, or an antenna that is not pointing up.
+
+**Gain peaks at 15–45° elevation toward W/WSW, not at zenith** (44–45 dB-Hz there
+against 26–27 at 75°+). A level antenna over a ground plane peaks at zenith. A boresight
+tilted 35–45° from vertical toward WSW reproduces both this and the dead eastern half.
+Worth a look at the mount before anything else is tried.
+
+This is the direct cause of three things recorded elsewhere: 47% of observations carry
+no carrier phase, CSRS-PPP cannot resolve ambiguities (`IAR 0.00%`), and the PPP east
+coordinate is the weak axis — the blocked half of the sky is the east half.
 
 ## Out of spec on purpose
 
