@@ -20,6 +20,21 @@ SCHEMA_VERSION = 1
 DEFAULT_RETENTION_DAYS = 365.0
 FULL_RESOLUTION_DAYS = 7
 QUARTER_HOUR_DAYS = 30
+# Keep structured measurements in the public, downsampled history.  The private
+# JSONL archive retains the complete gpsstat record; routine OK prose is omitted
+# here because repeating it thousands of times adds little diagnostic value.
+PUBLIC_SAMPLE_KEYS = (
+    "at", "status", "exit_code",
+    "ref", "ref_id", "stratum", "rms_ns",
+    "gnss_time", "leap_seconds", "sats_used", "sats_seen", "pdop", "tdop",
+    "constellations", "best_cn0_dbhz",
+    "receiver_tacc_ns", "pps_offset_ns", "pps_stddev_ns", "max_error_ns",
+    "rf_blocks", "spoof_state", "spoof_code",
+    "ref_freq_live", "ref_freq_offset", "ref_freq_skew", "ref_drift_age_min",
+    "holdover_us_per_day", "trim_turns", "mikes_sources",
+    "mode", "survey_started", "survey_duration_hours", "survey_elapsed_hours",
+    "survey_progress_percent", "survey_ready",
+)
 STATUS_RE = re.compile(r"^  (OK|WARN|FAIL|NOTE)\s+(.*)$")
 NUMBER_RE = re.compile(r"([+-]?[0-9]+(?:\.[0-9]+)?)\s*(ns|us|ms|s|seconds?)?", re.I)
 UNIT_NS = {"ns": 1.0, "us": 1_000.0, "ms": 1_000_000.0, "s": 1_000_000_000.0,
@@ -290,14 +305,9 @@ def append_history(path: Path, sample: dict) -> None:
 
 
 def public_history(samples: list[dict], now: datetime) -> list[dict]:
-    """Publish 7 days at full resolution, 30 days at 15 min, then hourly."""
+    """Publish useful telemetry at 7-day, 30-day, then hourly resolution."""
     if not samples:
         return []
-    chart_keys = (
-        "at", "status", "pps_offset_ns", "pps_stddev_ns", "receiver_tacc_ns",
-        "max_error_ns", "sats_used", "sats_seen", "rf_blocks", "spoof_state",
-        "spoof_code", "ref_freq_offset", "ref_freq_skew", "mikes_sources", "mode",
-    )
     full_cutoff = now - timedelta(days=FULL_RESOLUTION_DAYS)
     quarter_hour_cutoff = now - timedelta(days=QUARTER_HOUR_DAYS)
     hourly: dict[int, dict] = {}
@@ -312,7 +322,15 @@ def public_history(samples: list[dict], now: datetime) -> list[dict]:
         else:
             hourly[int(timestamp.timestamp()) // 3600] = item
     history = list(hourly.values()) + list(quarter_hourly.values()) + recent
-    compact = [{key: item[key] for key in chart_keys if key in item} for item in history]
+    compact = []
+    for item in history:
+        published = {key: item[key] for key in PUBLIC_SAMPLE_KEYS if key in item}
+        # Warnings, failures, and notes explain abnormal measurements. Repeated
+        # OK messages remain available in the private full-resolution archive.
+        checks = [check for check in item.get("checks", []) if check.get("level") != "ok"]
+        if checks:
+            published["checks"] = checks
+        compact.append(published)
     compact.append(samples[-1])
     return compact
 
