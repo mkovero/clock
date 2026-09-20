@@ -113,9 +113,10 @@ Final products (~2026-09-30) are an optional pass and should move little.
 [hardware](docs/hardware.md#what-the-antenna-can-actually-see). The half of the sky
 from N clockwise to SSE returns 0-2% carrier phase at every elevation, so no product
 tier can resolve ambiguities from this log, and the east coordinate is the weak axis
-because east is the blocked side. Gain peaks at 15-45 degrees elevation toward WSW
-rather than at zenith, which is what a tilted antenna looks like — check the mount
-before spending another observation.
+because east is the blocked side. A 10-degree azimuth cut puts a hard edge at ~185
+degrees — 9 dB in one bin, which is a building corner, not an antenna pattern — and
+a second obstruction sits overhead, costing 15 dB above 75 degrees elevation. The
+antenna should stay level; the win is moving it clear of what is above it.
 
 Anything that changes the antenna needs a fresh 24 h RAWX log and a re-run of
 `f9t-skymap`; that is the measurement that says whether it helped. A multi-day log

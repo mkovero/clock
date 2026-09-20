@@ -204,15 +204,35 @@ el 15+  2   2   8 78  95 97         19  20  22 35  41 45
 at 0–2% phase yield; everything from S clockwise to NNW is 25–45 dB-Hz at 60–99%. The
 useful sky is a wedge centred on WSW.
 
-**The cut does not depend on elevation**, which is what rules out an ordinary horizon
-obstruction: a building that blocks 75° elevation would have to be directly overhead.
-Attenuation of 15–20 dB across a whole hemisphere at every elevation means something
-immediately beside the antenna, or an antenna that is not pointing up.
+**The cut does not depend on elevation**, and it is sharp. Pinning elevation to
+20–55° and cutting in azimuth alone at 10° resolution:
 
-**Gain peaks at 15–45° elevation toward W/WSW, not at zenith** (44–45 dB-Hz there
-against 26–27 at 75°+). A level antenna over a ground plane peaks at zenith. A boresight
-tilted 35–45° from vertical toward WSW reproduces both this and the dead eastern half.
-Worth a look at the mount before anything else is tried.
+```
+az 170   25.1 dB-Hz   19% phase
+az 180   26.6         32%
+az 190   35.9         81%     <- +9.3 dB, +49 points, in 10 degrees
+az 230   42.7         99%
+az 280   46.1        100%
+```
+
+**That is a shadow edge, not an antenna pattern.** A patch antenna's gain rolls off
+smoothly over tens of degrees; it cannot step 9 dB within one 10° azimuth bin at
+constant elevation. There is a building corner at azimuth ≈185°, and the structure
+behind it shadows everything from there anticlockwise to about 20°.
+
+**There is a second obstruction overhead.** Within the *clear* sector, signal falls
+from 39–44 dB-Hz at 30–55° elevation to 26–27 at 75°+, and phase yield above 80°
+drops to 8%. Something sits above the antenna — eave, soffit, balcony or lintel.
+The usable sky is a wedge roughly 15–60° in elevation, 190°–330° in azimuth.
+
+**Do not tilt the antenna to chase it.** The clear wedge already returns 42–47 dB-Hz
+at 98–100% phase yield, so a tilt would add a few dB where nothing is lacking, and
+charge for it where timing is made: the phase centre stops sitting where a PCV model
+would assume (and `ANT NOT FOUND` means there is no model to correct it), the ground
+plane stops shielding against reflections from below, and LHCP rejection degrades
+off-boresight. Keep it level. What pays is moving it out from under whatever is
+overhead — zenith satellites have the shortest path, least troposphere and least
+multipath, and they are the ones currently being thrown away.
 
 This is the direct cause of three things recorded elsewhere: 47% of observations carry
 no carrier phase, CSRS-PPP cannot resolve ambiguities (`IAR 0.00%`), and the PPP east

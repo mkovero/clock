@@ -142,6 +142,7 @@ def main():
 
     cells = collections.defaultdict(lambda: {"n": 0, "ss": 0.0, "ph": 0})
     prof = collections.defaultdict(lambda: {"n": 0, "ss": 0.0, "ph": 0})
+    azcut = collections.defaultdict(lambda: {"n": 0, "ss": 0.0, "ph": 0})
     order, cur, nep, skipped = {}, None, 0, 0
 
     opener = gzip.open if obs_path.endswith(".gz") else open
@@ -175,8 +176,11 @@ def main():
             for k, t in enumerate(order.get(ln[0], [])):
                 c = ln[3 + 16 * k:3 + 16 * k + 14]
                 f[t] = float(c) if c.strip() else 0.0
-            for d, key in ((cells, (int(az // 30) * 30, min(int(el // 15) * 15, 75))),
-                           (prof, min(int(el // 10) * 10, 80))):
+            targets = [(cells, (int(az // 30) * 30, min(int(el // 15) * 15, 75))),
+                       (prof, min(int(el // 10) * 10, 80))]
+            if 20 <= el <= 55:
+                targets.append((azcut, int(az // 10) * 10))
+            for d, key in targets:
                 c = d[key]
                 c["n"] += 1
                 c["ss"] += f.get("S1C", 0.0)
@@ -203,6 +207,22 @@ def main():
          lambda c: "%.0f" % (c["ss"] / c["n"]))
     grid("carrier-phase yield (% of observations carrying L1 phase)",
          lambda c: "%.0f" % (100.0 * c["ph"] / c["n"]))
+
+    # A cut in azimuth alone, at finer resolution and with elevation pinned to the
+    # band where signal is strongest. This is what separates an obstruction from an
+    # antenna pattern: a patch antenna's gain rolls off smoothly over tens of
+    # degrees, so a step of several dB within one 10-degree bin is a shadow edge,
+    # not a boresight.
+    print()
+    print("azimuth cut at 10 degrees, elevation 20-55 only")
+    print(" az       n   C/N0  phase%")
+    for a in range(0, 360, 10):
+        c = azcut.get(a)
+        if not c or c["n"] < 25:
+            print("%3d       -      -      -" % a)
+            continue
+        ph = 100.0 * c["ph"] / c["n"]
+        print("%3d %7d  %4.1f  %5.0f  %s" % (a, c["n"], c["ss"] / c["n"], ph, "#" * int(ph / 3)))
 
     print()
     print("elevation profile, all azimuths:")
