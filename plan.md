@@ -218,9 +218,32 @@ forgotten.
 
 ---
 
-## Step 3b — trimming the AR-40A: measured, and not needed for timekeeping
+## Step 3b — trimming the AR-40A: DONE 2026-09-20, one step left
 
-**Leave it alone for now, and probably for good.** Measured 2026-09-14.
+**−2.5510×10⁻⁹ → −3.50×10⁻¹⁰ in two moves, a factor of 7.3.** Full record in
+`config/ar40a-trim-log.txt`; 0.70 turns would null it and are deliberately left for
+another day. What the trimming established, none of which was known before:
+
+- **Forward is clockwise, and it raises frequency.** Nothing had recorded this.
+- **4.89–4.92×10⁻¹⁰ per turn**, against the manual's 5×10⁻¹⁰ — spec good to 2%, and
+  linear across 4.5 turns, so the endstop was never reached and travel remains.
+- **The rig does not notice.** Stratum 1 throughout, PPS2 +0 ns, stddev 20 ns, across
+  a 2×10⁻⁹ frequency step. The step is in the rubidium; chrony's servo absorbs it.
+- **No mechanical creep so far.** The half turn drifted 2×10⁻¹² in the following hour;
+  the four-turn move settled in 38 min at a skew *below* its own starting value. The
+  warning below about creep for hours to days is not what this unit does.
+- **Skew is the settle indicator, not the offset.** The offset reads nearly right
+  within minutes; skew is what says chrony has converged and the number can be
+  trusted. Watch for it to return to ~3×10⁻¹¹.
+- **A reading is only valid if the drift file was written after the move.** Freshness
+  alone is not enough — a file under an hour old can still predate the turn.
+
+The reasoning below is retained because its conclusion still stands: this buys
+nothing for timekeeping, and it was done because it was there to do.
+
+---
+
+**Original assessment, 2026-09-14: leave it alone for now, and probably for good.**
 
 ### What the frequency is doing
 
