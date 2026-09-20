@@ -13,10 +13,16 @@
 # Wait at least 1 h after each move before believing a reading, and expect creep for
 # hours afterwards. Judge a move by the trend over several readings, not the first.
 #
-# Direction was UNKNOWN as of the baseline below. The offset is negative, so frequency
-# has to rise; the first half turn is what establishes which way that is.
+# DIRECTION: forward raises frequency. Established 2026-09-20 by the half turn below,
+# which moved +2.44e-10, so sensitivity is 4.88e-10 per turn against the manual's 5e-10.
+#
+# RANGE IS THE THING TO WATCH. The trimmer has 10 turns end to end and nobody knows
+# where it started. Nulling the original -2.5510e-09 takes about 5.2 turns forward in
+# total, so if it began near centre the endstop is roughly where the job finishes. A
+# move that produces less than ~4.9e-10 per turn is the endstop arriving, not a bad
+# reading; stop rather than force it.
 #
 # date/time (UTC) | move        | offset before | offset after (>=1 h) | notes
 
 2026-09-20 08:00  | (baseline)  | -2.5510e-09   | -                    | 9 days after the 2026-09-11 power cycle, undisturbed. Hourly spread <=5e-12, chrony skew 3.2e-11, drift file 48 min old. 5.10 turns of 10 would null it.
-2026-09-20 08:29  | +0.5 fwd    | -2.5510e-09   | PENDING              | First move. "Forward" as the operator faces the trimmer; clockwise not independently confirmed. Total from baseline: +0.5 turn. The drift file was 56 min old at the turn, so the before value is genuinely pre-turn. Expect ~2.5e-10 of movement against ~1e-11 of hourly wander: right way lands near -2.30e-09, wrong way near -2.80e-09.
+2026-09-20 08:29  | +0.5 fwd    | -2.5510e-09   | -2.3070e-09 (08:48)  | First move, and it settles the direction: FORWARD RAISES FREQUENCY. "Forward" as the operator faces the trimmer; clockwise not independently confirmed. Total from baseline: +0.5 turn. Moved +2.440e-10, i.e. 4.88e-10 per turn against the manual's 5e-10 — the spec figure is good to 2.4%. Reading is provisional: chrony skew went 3.2e-11 -> 1.45e-10 and the drift file covered only 4 min of post-turn data, so the servo was still chasing the step. Re-read once skew is back near 3e-11.
