@@ -13,7 +13,8 @@
 # Wait at least 1 h after each move before believing a reading, and expect creep for
 # hours afterwards. Judge a move by the trend over several readings, not the first.
 #
-# DIRECTION: forward raises frequency. Established 2026-09-20 by the half turn below,
+# DIRECTION: forward, which is CLOCKWISE, raises frequency. Confirmed by the operator
+# 2026-09-20; the two words are used interchangeably below. Established by the half turn,
 # which moved +2.44e-10, so sensitivity is 4.88e-10 per turn against the manual's 5e-10.
 #
 # RANGE IS THE THING TO WATCH. The trimmer has 10 turns end to end and nobody knows
@@ -26,4 +27,4 @@
 
 2026-09-20 08:00  | (baseline)  | -2.5510e-09   | -                    | 9 days after the 2026-09-11 power cycle, undisturbed. Hourly spread <=5e-12, chrony skew 3.2e-11, drift file 48 min old. 5.10 turns of 10 would null it.
 2026-09-20 08:29  | +0.5 fwd    | -2.5510e-09   | -2.3050e-09 (09:43)  | First move, and it settles the direction: FORWARD RAISES FREQUENCY. "Forward" as the operator faces the trimmer; clockwise not independently confirmed. Total from baseline: +0.5 turn. Moved +2.460e-10, i.e. 4.92e-10 per turn against the manual's 5e-10 — spec good to 1.6%. Settled reading: chrony skew back to 3.10e-11 from a post-move peak of 1.45e-10, drift file 10 min old, 1 h 14 min after the turn. (A provisional -2.3070e-09 read at 08:48 while the servo was still chasing; the settled value is 2e-12 away from it, so the servo had very nearly converged already.) Remaining to null: 4.68 turns, 5.18 from baseline.
-2026-09-20 09:56  | +4 cw (~)   | -2.3050e-09   | PENDING              | Second move, done in one go rather than in steps: each poke costs a settling period, and one disturbance to the aging record beats four. Stopped deliberately ~0.68 turn short of the null — the null needs 5.18 turns from baseline and a centre-started trimmer only has 5.0, and the offset is cosmetic anyway (chrony carries it). Count is approximate, and the operator said "clockwise" where the first move was recorded as "forward"; if those are the same direction this lands near -3.4e-10, if opposite, near -4.27e-09. The settled reading decides it, and also back-solves the true turn count at 4.92e-10 per turn.
+2026-09-20 09:56  | +4 cw (~)   | -2.3050e-09   | PENDING              | Second move, done in one go rather than in steps: each poke costs a settling period, and one disturbance to the aging record beats four. Stopped deliberately ~0.68 turn short of the null — the null needs 5.18 turns from baseline and a centre-started trimmer only has 5.0, and the offset is cosmetic anyway (chrony carries it). Clockwise confirmed to be the same direction as the first move's "forward", so this should land near -3.4e-10. Count is approximate; at 4.92e-10 per turn the settled offset back-solves the true number of turns (-3.4e-10 means 4.0, -5.9e-10 means 3.5, -0.9e-10 means 4.5). Landing materially short of prediction would mean the endstop rather than a bad reading.
