@@ -1,0 +1,22 @@
+# AR-40A mechanical trim log
+#
+# The trimmer sits under the calibration sticker: 1 turn ~ 5e-10, 10 turns end to
+# end (docs/hardware.md). Nothing records where it sits, so this file is the only
+# record of where it has been put. Fill in a row per move, including the ones that
+# turned out to be the wrong way.
+#
+# Read the offset from ref_freq_offset (chrony drift file, 1e-12 resolution) with a
+# fresh "drift file age", never from chronyc tracking, which quantises at 1e-9 and
+# will show a flat 0.003 ppm while the rubidium moves by 5e-10. gpsstat prints both
+# the offset and the turns still needed to null it.
+#
+# Wait at least 1 h after each move before believing a reading, and expect creep for
+# hours afterwards. Judge a move by the trend over several readings, not the first.
+#
+# Direction was UNKNOWN as of the baseline below. The offset is negative, so frequency
+# has to rise; the first half turn is what establishes which way that is.
+#
+# date/time (UTC) | move        | offset before | offset after (>=1 h) | notes
+
+2026-09-20 08:00  | (baseline)  | -2.5510e-09   | -                    | 9 days after the 2026-09-11 power cycle, undisturbed. Hourly spread <=5e-12, chrony skew 3.2e-11, drift file 48 min old. 5.10 turns of 10 would null it.
+2026-09-20 08:29  | +0.5 fwd    | -2.5510e-09   | PENDING              | First move. "Forward" as the operator faces the trimmer; clockwise not independently confirmed. Total from baseline: +0.5 turn. The drift file was 56 min old at the turn, so the before value is genuinely pre-turn. Expect ~2.5e-10 of movement against ~1e-11 of hourly wander: right way lands near -2.30e-09, wrong way near -2.80e-09.
