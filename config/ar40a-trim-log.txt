@@ -31,8 +31,18 @@
 2026-09-21 17:22  | +0.46 cw    | -3.5500e-10   | -1.2900e-10 (17:43)  | Third move, turned by feel as "a bit over half a turn"; it back-solves to 0.46 at 4.888e-10 per turn, so a bit under. Sensitivity still linear after 4.93 turns of travel — no endstop reached yet. Settled in ~20 min, skew 2.90e-11. Live rb-freq-live read -1.178e-10 at the same moment: the kernel figure runs ~1.1e-11 less negative than the drift file, the same gap seen pre-move, because it is the applied correction rather than chrony's frequency estimate. Trust the drift file for a final number and the live tool for steering between moves.
 2026-09-21 17:51  | +0.32 cw    | -1.2900e-10   | +2.8000e-11 (18:39)  | Final move, aimed at 0.26 turns and delivered 0.321 — within hand precision on a screw this light. Crossed zero: the rubidium now runs very slightly FAST. NO ENDSTOP at 5.25 turns of 10, so the trimmer did not start at centre and there is travel left in this direction. Watch out for the live tool here: rb-freq-live read +1.3e-12 while the servo was still converging, and the settled drift file came in 2.7e-11 higher. The ~1.1e-11 live-vs-drift gap seen earlier is not a reliable constant — steer with the live tool, but take the final number from the drift file with a fresh age and settled skew.
 #
-# DONE 2026-09-21. -2.5510e-09 -> +2.8000e-11, a factor of 91. Holdover 220.1 ->
-# 2.4 us/day. Total travel 5.25 turns of 10, all forward/clockwise.
+# DONE 2026-09-21. -2.5510e-09 -> +2.8000e-11, a factor of 91. Total travel 5.25
+# turns of 10, all forward/clockwise.
+#
+# HOLDOVER DID NOT CHANGE. gpsstat's "holdover drift if GNSS is lost" went from
+# 220.1 to 1.9 us/day, but that line is the static offset re-expressed as daily
+# drift, and chrony carries the static offset in its frequency estimate -- see
+# plan.md Step 3b. Real holdover is p95 79 us at 24 h, worst 332 us, measured
+# 2026-09-13, and it is governed by how much the frequency CHANGES after the
+# reference is lost. The trimmer does nothing about that. What the trim did buy:
+# a correct raw 10 MHz for anything reading it directly, a sane starting point if
+# chrony ever loses its drift file, and the direction/sensitivity/travel figures
+# above, none of which were known before.
 #
 # STOP HERE. The residual of 2.8e-11 is 0.90x chrony's own skew of 3.1e-11: the
 # error left is smaller than the uncertainty it is measured with, and roughly 3x

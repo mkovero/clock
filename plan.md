@@ -220,9 +220,14 @@ forgotten.
 
 ## Step 3b — trimming the AR-40A: DONE 2026-09-21
 
-**−2.5510×10⁻⁹ → +2.80×10⁻¹¹ in four moves, a factor of 91.** Holdover drops from
-220.1 to 2.4 µs/day. Total travel 5.25 turns of ten, all clockwise, with no endstop
-reached. Full record in `config/ar40a-trim-log.txt`.
+**−2.5510×10⁻⁹ → +2.80×10⁻¹¹ in four moves, a factor of 91.** Total travel 5.25 turns
+of ten, all clockwise, with no endstop reached. Full record in
+`config/ar40a-trim-log.txt`.
+
+**Holdover is unchanged**, exactly as the correction below predicted. `gpsstat`'s
+holdover line fell from 220.1 to 1.9 µs/day, but that line is the static offset in
+disguise; real holdover stays at p95 79 µs over 24 h. The trim was worth doing for the
+raw 10 MHz and for the numbers it established, not for timekeeping.
 
 **Finished, and not because it ran out of adjustment.** The residual is 0.90× chrony's
 own skew, so what is left is smaller than the uncertainty it is measured with, and
