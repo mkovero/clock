@@ -49,7 +49,11 @@ lock_all
   times a day, 36 to 113 s each. A stale NMEA sample is cheap here because it only fixes
   *which* second: over 60 s the rubidium-disciplined clock drifts about 1.7 ns. The
   fail-closed property is kept, just with a 60 s fuse instead of a 2 s one.
-- **NMEA** is `noselect` and used only for labelling. At 115200 it reads about +60 ms.
+- **NMEA** is `noselect` and used only for labelling. At 460800 it reads +45 ms or +57 ms
+  and steps between the two every ~18 min. The step follows the sign of `UBX-NAV-PVT nano`
+  (the receiver's 1 ms clock-bias sawtooth): with `nano` ≥ 0 gpsd times the sample from the
+  UBX burst, with `nano` < 0 from the first NMEA sentence. At 115200 the same two modes sat
+  at +52 ms and +105 ms. Each step makes `sourcestats` drop its samples; it is cosmetic.
 - **MIKES** servers sit ~1 ms from the local clock with ~10 ms error bars. They are a
   sanity check, not a reference.
 - There is no `/dev/pps0`. gpsd logs `unable to read /dev/pps0` on startup, and that
@@ -113,7 +117,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | Time pulse | TP2 1 Hz, 50% duty, `USE_LOCKED_TP2=1`, locked-only since 2026-09-14 |
 | Cable delay | `CFG-TP-ANT_CABLEDELAY=40` ns (8 m ÷ (0.66 c) = 40.4 ns). Excludes LNA and receiver delay |
 | Signals | GPS L1C/A + L2C, Galileo E1 + E5b, BeiDou B1I + B2I |
-| UART1 | 115200. RTCM3 base-station output off. RAWX/SFRBX on only while logging for PPP |
+| UART1 | 460800. RTCM3 base-station output off. RAWX/SFRBX on only while logging for PPP |
 
 - **Position error becomes constant time bias** at about 3.3 ns per metre, because TMODE
   fixed treats the position as truth. `CFG-TMODE-HEIGHT` is height **above the

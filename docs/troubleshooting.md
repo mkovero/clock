@@ -106,9 +106,9 @@ samples** in the same 50 s window. PPS2 no longer gaps with NMEA.
 pulses to the wrong second and the clock sat **527 ms off UTC while reporting stratum 1
 with a few-ns offset**. The servo was tracking the wrong pulse perfectly.
 
-UART1 is now at 115200. Before enabling any new output on UART1, check the latency
-margin. `f9t-rawlog` measures it before and after and backs out if the budget is
-exceeded.
+UART1 is now at 460800 (115200 until 2026-09-19). Before enabling any new output on
+UART1, check the latency margin. `f9t-rawlog` measures it before and after and backs out
+if the budget is exceeded.
 
 ## No reference at the Si5351
 

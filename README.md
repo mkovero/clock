@@ -41,7 +41,7 @@ AccuBeat AR-40A rubidium ── 10 MHz sine
    │ Raspberry Pi CM4 "aika"                   │
    │  XIN ← 54 MHz (crystal removed)           │
    │  PHY PHC /dev/ptp0 ← PPS on J2 pin 9      │ eth0
-   │  ttyAMA0 ← UBX/NMEA, 115200               ├────► NTP + PTP
+   │  ttyAMA0 ← UBX/NMEA, 460800               ├────► NTP + PTP
    │  chrony · gpsd · ptp4l · phc2sys          │
    └───────────────────────────────────────────┘
         ▲ TIME2 1 PPS        ▲ UART1

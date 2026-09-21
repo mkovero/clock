@@ -8,6 +8,14 @@ The dashboard is deliberately two static files:
   samples through 30 days, and hourly samples through one year. The private JSON-lines
   archive keeps every five-minute collection for the full year.
 
+Each published historical sample keeps the structured measurements needed for later
+diagnosis: RF jamming state, raw interference indicator, AGC and noise for every RF
+block; spoof state; C/N0 and DOP; constellation and satellite counts; PPS/receiver
+timing; reference-oscillator and MIKES measurements; operating mode; and non-OK check
+messages. The newest sample remains the complete `gpsstat` record, including its OK
+checks and human-readable values. This makes `data.json` useful to other tools as well
+as to the page without duplicating routine OK text throughout the year-long history.
+
 At the 2026-09-13 baseline the private archive averaged about 1.77 kB per sample. A
 year at five-minute resolution is therefore about 186 MB, against 4.1 GB free on
 `/dev/root` at the time the policy was enabled. A synthetic year built from live sample
