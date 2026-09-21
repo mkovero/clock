@@ -27,7 +27,7 @@ F9T UART1 ──► gpsd ──► SHM(0) ──► chrony refclock NMEA ──�
 ### chrony (`/etc/chrony.conf`)
 
 ```
-refclock PHC /dev/ptp0:extpps poll 4 precision 1e-9 refid PPS2 lock NMEA prefer maxunreach 10800
+refclock PHC /dev/ptp0:extpps poll 4 precision 1e-9 refid PPS2 lock NMEA maxlockage 60 prefer maxunreach 10800
 refclock SHM 0 poll 4 refid NMEA noselect
 server time.mikes.fi  iburst minpoll 6 maxpoll 12
 server time1.mikes.fi iburst minpoll 6 maxpoll 12
@@ -42,6 +42,13 @@ lock_all
   decide which second a pulse belongs to. The NMEA sample must fall within ±0.5 s of the
   second, or the pulse is numbered to the wrong second
   ([troubleshooting](troubleshooting.md#uart-bandwidth-is-a-correctness-constraint)).
+  Keep the lock: it makes a bad NMEA fail *closed*, starving PPS2, rather than open, and
+  what failing open looks like is 527 ms off UTC at stratum 1 with a few-ns offset.
+- **`maxlockage 60`** (2026-09-21) is how far that lock is allowed to stretch. The default
+  of 2 pulses meant any gpsd SHM silence beyond ~2 s took PPS2 down with NMEA — 10 to 35
+  times a day, 36 to 113 s each. A stale NMEA sample is cheap here because it only fixes
+  *which* second: over 60 s the rubidium-disciplined clock drifts about 1.7 ns. The
+  fail-closed property is kept, just with a 60 s fuse instead of a 2 s one.
 - **NMEA** is `noselect` and used only for labelling. At 115200 it reads about +60 ms.
 - **MIKES** servers sit ~1 ms from the local clock with ~10 ms error bars. They are a
   sanity check, not a reference.
@@ -136,6 +143,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | `survey-2026-09-11.meta` | standalone survey result, superseded by PPP |
 | `ppp-2026-09-12.sum`, `ppp-2026-09-12-rapid.sum`, `f9t-ppp-position.txt` | CSRS-PPP reports (ultra-rapid, then rapid) and the TMODE keys written from the rapid one |
 | `f9t-reminders` | date-gated reminders shown by `gpsstat` |
+| `chrony.conf` | copy of `/etc/chrony.conf`, tracked since 2026-09-21 |
 | `rb-freq-live` | AR-40A frequency offset live from `adjtimex`, for tuning the trimmer |
 
 ## Bias and error budget
