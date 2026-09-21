@@ -391,19 +391,26 @@ fi
 if [ -n "${FRAC:-}" ]; then
 	ABSFRAC=$(awk -v f="$FRAC" 'BEGIN{ printf "%.4e", (f < 0 ? -f : f) }')
 
-	# The fractional offset restated as the thing it actually costs. GNSS supplies
-	# accuracy while it is present, and 1e-9 is invisible to the Orion (audio wants
-	# ppm) and to bench instruments, so this offset shows up in exactly one place:
-	# how fast the rig walks away from UTC if GNSS is lost.
-	printf '  holdover drift if GNSS is lost            : %s us/day\n' \
+	# The offset restated as a daily time error. This used to be labelled "holdover
+	# drift if GNSS is lost", which is wrong and misled a whole session on 2026-09-21:
+	# chrony carries the static offset in its frequency estimate, keeps applying it
+	# when the refclocks go unreachable, and reloads it from the drift file after a
+	# reboot, so a *static* offset never accumulates as time error. Real holdover is
+	# set by how much the frequency CHANGES afterwards -- aging, temperature, retrace
+	# -- and was measured at p95 79 us over 24 h on 2026-09-13 (plan.md Step 3b).
+	# Where the offset does land is the raw 10 MHz: the Orion disciplines its clock
+	# DAC against it.
+	printf '  static offset as time error per day       : %s us/day\n' \
 		"$(awk -v a="$ABSFRAC" 'BEGIN{ printf "%.1f", a * 86400 * 1e6 }')"
+	printf '  measured holdover (p95 24 h, 2026-09-13)  : 79 us  (frequency stability, not this offset)\n'
 
-	# Mechanical trim is 10 turns over 5e-9 total, i.e. ~5e-10 per turn (docs/hardware.md).
-	# Printed as turns because that is the unit the adjustment is made in. Whether
-	# the turns are *available* depends on where the trimmer currently sits, which
-	# is not recorded anywhere — see plan.md before opening the case.
+	# Mechanical trim: 4.888e-10 per turn, measured across 5.25 turns on 2026-09-20/21
+	# and linear throughout, against the manual's nominal 5e-10 (docs/hardware.md).
+	# Printed as turns because that is the unit the adjustment is made in. 5.25 of the
+	# ten turns have been spent going forward/clockwise, which raises frequency; see
+	# config/ar40a-trim-log.txt before opening the case.
 	printf '  mechanical trim to null this              : %s turns of 10\n' \
-		"$(awk -v a="$ABSFRAC" 'BEGIN{ printf "%.2f", a / 5e-10 }')"
+		"$(awk -v a="$ABSFRAC" 'BEGIN{ printf "%.2f", a / 4.888e-10 }')"
 	case "${REFID:-}" in
 		*PPS2*)
 			if awk -v a="$ABSFRAC" 'BEGIN{ exit !(a < 1e-8) }'; then

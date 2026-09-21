@@ -50,6 +50,14 @@
 # not a trim, it is chasing the instrument. Nulling further needs a better
 # reference, not a better screwdriver.
 #
+# CORROBORATED AT THE 10 MHz OUTPUT. The Antelope Orion 32 HD disciplines its clock
+# DAC against the raw 10 MHz, and it re-calibrated to the new frequency on its own,
+# reading Err 0.0060 ppm before zeroing out (operator observation, 2026-09-21; its
+# prior calibration state is not recorded, so treat the magnitude as indicative
+# rather than a measurement). It is the one consumer that sees the rubidium directly
+# rather than through chrony, so this is independent evidence the trim reached the
+# output and not merely chrony's frequency estimate.
+#
 # If it ever does need moving again: forward is clockwise and raises frequency,
 # 4.888e-10 per turn (linear across all 5.25 turns used), and 5.25 turns of the
 # ten have been spent going forward.

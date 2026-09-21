@@ -131,8 +131,13 @@ def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
             sample["ref_freq_skew"] = number(match.group(1))
             continue
 
+        # gpsstat relabelled this on 2026-09-21: it is the static offset restated as
+        # a daily time error, not holdover, which chrony's frequency estimate absorbs.
+        # Both spellings are accepted so history written before the rename still parses.
+        # The JSON key keeps its original name to stay continuous with that history.
         match = re.match(
-            r"^  holdover drift if GNSS is lost\s*:\s*(\S+) us/day$", line)
+            r"^  (?:static offset as time error per day"
+            r"|holdover drift if GNSS is lost)\s*:\s*(\S+) us/day$", line)
         if match:
             sample["holdover_us_per_day"] = number(match.group(1))
             continue
