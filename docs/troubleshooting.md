@@ -71,6 +71,34 @@ epoch, so a flat cell costs months at most. The step-and-starve failure still ap
 any large step. `gpsd-after-timesync` and `gpsd-shm-watchdog` restart gpsd automatically
 ([timing.md](timing.md#gpsd-self-healing)). A backup cell is tracked in plan.md.
 
+## `lock NMEA` took PPS2 down with every gpsd hiccup
+
+*2026-09-21.* `gpsstat` intermittently warned `refclock PPS2 reach 177 (filling or
+lossy)` and `refclock NMEA reach 177` together, clearing on its own within minutes.
+
+`refclocks.log` showed both refclocks losing samples over **identical** windows — same
+timestamps, same durations, 36 to 113 s, between 10 and 35 times a day. They do not
+share a path: PPS2 is the PHY's external timestamp on `/dev/ptp0`, NMEA is gpsd's SHM
+segment. What joins them is `lock NMEA`, which is how PPS2 learns which second a pulse
+belongs to, plus `maxlockage`, whose **default is 2 pulses**. Any gpsd SHM silence
+beyond about 2 s therefore discarded every pulse in the window, although the pulses
+themselves kept arriving at the PHY untouched. The watchdog journal confirmed the
+trigger: `gpsd SHM(0) silent (check 1)` immediately before each gap. This is the same
+coupling as the 2026-09-10 incident above, in miniature, and it only reaches the
+watchdog's restart threshold when a silence lasts over two minutes.
+
+Fixed by raising `maxlockage` to 60 in `config/chrony.conf`. A stale NMEA sample costs
+almost nothing because it only fixes *which* second the pulse belongs to, and over 60 s
+the rubidium-disciplined clock drifts about 1.7 ns.
+
+Verified: a 37 s NMEA outage at 20:46:03 UTC produced **52 PPS2 samples and 16 NMEA
+samples** in the same 50 s window. PPS2 no longer gaps with NMEA.
+
+> **Keep the lock.** It is what makes a bad NMEA fail *closed*. Unlocked, PPS2 numbers
+> pulses against the system clock, and both incidents on this page show what that costs:
+> a clock two years stale in one, 527 ms off UTC at stratum 1 in the other. A 60 s fuse
+> instead of a 2 s one, not no fuse.
+
 ## UART bandwidth is a correctness constraint
 
 *2026-09-11.* Enabling RAWX + SFRBX at 38400 baud pushed the NMEA cycle from ~250 ms to
