@@ -2,4 +2,3 @@
 # Format: YYYY-MM-DD|message   (shown from that date onward)
 
 2026-09-30|Optional: resubmit ~/ppp/aika-20260912-0942.obs.gz to CSRS-PPP against FINAL products. Expect little: the 2026-09-19 rapid run was still float (IAR 0.00%) because half the observations carry no carrier phase, which products cannot fix. If it moves the position, update config/f9t-ppp-position.txt AND config/f9t-known-good.txt, or f9t-restore reverts it at boot.
-2026-09-21|AR-40A: finish the trim. Read ref_freq_offset FIRST with a fresh drift file — if it moved overnight that is mechanical creep, and the turns are computed from the new number, not from -3.50e-10. Then ~0.70 turns clockwise at 4.888e-10 per turn. Log it in config/ar40a-trim-log.txt.

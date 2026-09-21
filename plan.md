@@ -218,11 +218,18 @@ forgotten.
 
 ---
 
-## Step 3b — trimming the AR-40A: DONE 2026-09-20, one step left
+## Step 3b — trimming the AR-40A: DONE 2026-09-21
 
-**−2.5510×10⁻⁹ → −3.50×10⁻¹⁰ in two moves, a factor of 7.3.** Full record in
-`config/ar40a-trim-log.txt`; 0.70 turns would null it and are deliberately left for
-another day. What the trimming established, none of which was known before:
+**−2.5510×10⁻⁹ → +2.80×10⁻¹¹ in four moves, a factor of 91.** Holdover drops from
+220.1 to 2.4 µs/day. Total travel 5.25 turns of ten, all clockwise, with no endstop
+reached. Full record in `config/ar40a-trim-log.txt`.
+
+**Finished, and not because it ran out of adjustment.** The residual is 0.90× chrony's
+own skew, so what is left is smaller than the uncertainty it is measured with, and
+about 3× the 8×10⁻¹² the oscillator wanders by overnight unaided. Going further needs
+a better reference, not more turns.
+
+What the trimming established, none of which was known before:
 
 - **Forward is clockwise, and it raises frequency.** Nothing had recorded this.
 - **4.89–4.92×10⁻¹⁰ per turn**, against the manual's 5×10⁻¹⁰ — spec good to 2%, and

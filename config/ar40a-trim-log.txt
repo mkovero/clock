@@ -29,13 +29,17 @@
 2026-09-20 08:29  | +0.5 fwd    | -2.5510e-09   | -2.3050e-09 (09:43)  | First move, and it settles the direction: FORWARD RAISES FREQUENCY. "Forward" as the operator faces the trimmer; clockwise not independently confirmed. Total from baseline: +0.5 turn. Moved +2.460e-10, i.e. 4.92e-10 per turn against the manual's 5e-10 — spec good to 1.6%. Settled reading: chrony skew back to 3.10e-11 from a post-move peak of 1.45e-10, drift file 10 min old, 1 h 14 min after the turn. (A provisional -2.3070e-09 read at 08:48 while the servo was still chasing; the settled value is 2e-12 away from it, so the servo had very nearly converged already.) Remaining to null: 4.68 turns, 5.18 from baseline.
 2026-09-20 09:56  | +4 cw       | -2.3050e-09   | -3.5000e-10 (10:34)  | Second move, done in one go rather than in steps: each poke costs a settling period, and one disturbance to the aging record beats four. Stopped deliberately short of the null — nulling needs 5.18 turns from baseline while a centre-started trimmer has only 5.0, and the offset is cosmetic anyway since chrony carries it. Moved +1.9550e-09, which back-solves to 3.97 turns at the 4.92e-10 established by the first move: the "about 4 turns" was 4.00. NO ENDSTOP: sensitivity over these 4 turns was 4.888e-10 per turn against 4.920e-10 over the first half turn, so the trimmer is still linear and has travel left. Settled fast — skew 2.50e-11 at 10:34, below the 2.5-3.4e-11 pre-trim baseline, 38 min after the move. Total from baseline: 4.47 turns of 10. Remaining to null: 0.70 turns. Holdover 220.1 -> 30.2 us/day.
 2026-09-21 17:22  | +0.46 cw    | -3.5500e-10   | -1.2900e-10 (17:43)  | Third move, turned by feel as "a bit over half a turn"; it back-solves to 0.46 at 4.888e-10 per turn, so a bit under. Sensitivity still linear after 4.93 turns of travel — no endstop reached yet. Settled in ~20 min, skew 2.90e-11. Live rb-freq-live read -1.178e-10 at the same moment: the kernel figure runs ~1.1e-11 less negative than the drift file, the same gap seen pre-move, because it is the applied correction rather than chrony's frequency estimate. Trust the drift file for a final number and the live tool for steering between moves.
+2026-09-21 17:51  | +0.32 cw    | -1.2900e-10   | +2.8000e-11 (18:39)  | Final move, aimed at 0.26 turns and delivered 0.321 — within hand precision on a screw this light. Crossed zero: the rubidium now runs very slightly FAST. NO ENDSTOP at 5.25 turns of 10, so the trimmer did not start at centre and there is travel left in this direction. Watch out for the live tool here: rb-freq-live read +1.3e-12 while the servo was still converging, and the settled drift file came in 2.7e-11 higher. The ~1.1e-11 live-vs-drift gap seen earlier is not a reliable constant — steer with the live tool, but take the final number from the drift file with a fresh age and settled skew.
 #
-# STATE 2026-09-21: -1.29e-10, down from -2.5510e-09, a factor of 20. Holdover
-# 220.1 -> ~11 us/day. Total travel used: 4.93 turns of 10 (0.5 + 3.97 + 0.46).
+# DONE 2026-09-21. -2.5510e-09 -> +2.8000e-11, a factor of 91. Holdover 220.1 ->
+# 2.4 us/day. Total travel 5.25 turns of 10, all forward/clockwise.
 #
-# RANGE WARNING, now the live question. Nulling the remaining -1.29e-10 takes 0.26
-# turns, which would put the total at 5.19. A trimmer started at centre has 5.0, so
-# there may be only ~0.07 left. Sensitivity has stayed linear throughout, which is
-# weak evidence against being near the stop, but some trimmers give no warning. If
-# it stiffens, clicks or slips, STOP — do not force it. The difference between
-# -1.29e-10 and zero is invisible to everything on this rig.
+# STOP HERE. The residual of 2.8e-11 is 0.90x chrony's own skew of 3.1e-11: the
+# error left is smaller than the uncertainty it is measured with, and roughly 3x
+# the 8e-12 the oscillator wanders by on its own overnight. Another 0.06 turns is
+# not a trim, it is chasing the instrument. Nulling further needs a better
+# reference, not a better screwdriver.
+#
+# If it ever does need moving again: forward is clockwise and raises frequency,
+# 4.888e-10 per turn (linear across all 5.25 turns used), and 5.25 turns of the
+# ten have been spent going forward.
