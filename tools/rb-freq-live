@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""rb-freq-live — the AR-40A's frequency offset, live, for tuning the trimmer.
+
+    rb-freq-live [--target PPM] [--per-turn 4.888e-10] [--interval 1]
+
+`gpsstat` reads `ref_freq_offset` out of chrony's drift file, which has 1e-12
+resolution but is only rewritten once an hour. That is the right source for a
+settled number and a hopeless one for turning a trimmer against: every nudge
+costs an hour before it can be judged.
+
+Everything `chronyc` prints is quantised to 0.001 ppm, i.e. 1e-9 — coarser than
+the whole remaining error once the trim is close, so that is no use either.
+
+The kernel has the number all along. chrony steers the system clock through
+adjtimex(2), whose `freq` field is the correction currently being applied, in
+units of 2^-16 ppm: a resolution of 1.526e-11, readable at any instant. The
+rubidium's offset is that correction negated, because the correction is what
+cancels it.
+
+Two things to know before trusting a reading:
+
+  * The kernel figure carries the servo's offset-correction slew on top of the
+    standing frequency estimate, so a single sample wobbles by a few 1e-11. The
+    rolling means below are what to read, not the instantaneous value.
+  * chrony's servo needs minutes to converge after a step. Following a trim, let
+    the 300 s mean stop moving before believing it. That is still minutes rather
+    than the hour the drift file would cost.
+
+Sign convention matches `gpsstat`: negative means the rubidium runs slow.
+"""
+
+import argparse
+import collections
+import ctypes
+import ctypes.util
+import sys
+import time
+
+STA_UNSYNC = 0x0040
+
+
+class Timex(ctypes.Structure):
+    _fields_ = [("modes", ctypes.c_uint), ("offset", ctypes.c_long),
+                ("freq", ctypes.c_long), ("maxerror", ctypes.c_long),
+                ("esterror", ctypes.c_long), ("status", ctypes.c_int),
+                ("constant", ctypes.c_long), ("precision", ctypes.c_long),
+                ("tolerance", ctypes.c_long), ("tv_sec", ctypes.c_long),
+                ("tv_usec", ctypes.c_long), ("tick", ctypes.c_long),
+                ("ppsfreq", ctypes.c_long), ("jitter", ctypes.c_long),
+                ("shift", ctypes.c_int), ("stabil", ctypes.c_long),
+                ("jitcnt", ctypes.c_long), ("calcnt", ctypes.c_long),
+                ("errcnt", ctypes.c_long), ("stbcnt", ctypes.c_long),
+                ("tai", ctypes.c_int), ("pad", ctypes.c_int * 11)]
+
+
+LIBC = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+# One LSB of timex.freq, expressed as a fractional frequency.
+LSB = 1.0 / 65536.0 * 1e-6
+
+
+def read_offset():
+    """Fractional frequency offset of the reference, gpsstat's sign convention."""
+    t = Timex()
+    rc = LIBC.adjtimex(ctypes.byref(t))
+    if rc < 0:
+        raise OSError(ctypes.get_errno(), "adjtimex failed")
+    return -(t.freq / 65536.0 * 1e-6), t.status
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--target", type=float, default=0.0,
+                    help="fractional frequency to aim at (default 0)")
+    ap.add_argument("--per-turn", type=float, default=4.888e-10,
+                    help="trimmer sensitivity, measured 2026-09-20 (default 4.888e-10)")
+    ap.add_argument("--interval", type=float, default=1.0, help="seconds between samples")
+    a = ap.parse_args()
+
+    tty = sys.stdout.isatty()
+    win60 = collections.deque(maxlen=max(1, int(60 / a.interval)))
+    win300 = collections.deque(maxlen=max(1, int(300 / a.interval)))
+
+    print("AR-40A live frequency offset (kernel clock correction, %.2e resolution)" % LSB)
+    print("target %+.3e   trimmer %.3e per turn   Ctrl-C to stop" % (a.target, a.per_turn))
+    print()
+    print("  time        now         60 s        300 s      n     turns to target")
+    try:
+        while True:
+            off, status = read_offset()
+            win60.append(off)
+            win300.append(off)
+            m60 = sum(win60) / len(win60)
+            m300 = sum(win300) / len(win300)
+            turns = (a.target - m300) / a.per_turn
+            flag = "  UNSYNC" if status & STA_UNSYNC else ""
+            row = ("  %s  %+.3e  %+.3e  %+.3e  %4d  %+7.3f%s"
+                   % (time.strftime("%H:%M:%S"), off, m60, m300,
+                      len(win300), turns, flag))
+            # Redraw one line on a terminal; one line per sample when piped to a
+            # file or a pager, where a carriage return would run it all together.
+            sys.stdout.write(("\r" + row + " ") if tty else (row + "\n"))
+            sys.stdout.flush()
+            time.sleep(a.interval)
+    except KeyboardInterrupt:
+        off, _ = read_offset()
+        m300 = sum(win300) / len(win300) if win300 else off
+        print()
+        print()
+        print("last 300 s mean %+.4e over %d samples" % (m300, len(win300)))
+        print("turns to target %+.3f at %.3e per turn" % ((a.target - m300) / a.per_turn,
+                                                          a.per_turn))
+        print("Confirm against the drift file (gpsstat) once it has been rewritten.")
+
+
+if __name__ == "__main__":
+    main()

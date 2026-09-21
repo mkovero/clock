@@ -136,6 +136,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | `survey-2026-09-11.meta` | standalone survey result, superseded by PPP |
 | `ppp-2026-09-12.sum`, `ppp-2026-09-12-rapid.sum`, `f9t-ppp-position.txt` | CSRS-PPP reports (ultra-rapid, then rapid) and the TMODE keys written from the rapid one |
 | `f9t-reminders` | date-gated reminders shown by `gpsstat` |
+| `rb-freq-live` | AR-40A frequency offset live from `adjtimex`, for tuning the trimmer |
 
 ## Bias and error budget
 

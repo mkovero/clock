@@ -237,6 +237,13 @@ another day. What the trimming established, none of which was known before:
   trusted. Watch for it to return to ~3×10⁻¹¹.
 - **A reading is only valid if the drift file was written after the move.** Freshness
   alone is not enough — a file under an hour old can still predate the turn.
+- **The kernel has the number live.** chrony steers the clock through `adjtimex(2)`,
+  whose `freq` field is the correction being applied right now, in units of 2⁻¹⁶ ppm
+  — 1.53×10⁻¹¹ resolution, against the 1×10⁻⁹ that everything `chronyc` prints. The
+  rubidium's offset is that correction negated. `tools/rb-freq-live` displays it, so
+  the trimmer can be turned against a number that moves in minutes rather than in
+  hours. chrony dithers between adjacent LSBs, so read the rolling mean, not the
+  instantaneous value; agreement with the drift file is better than one LSB.
 
 The reasoning below is retained because its conclusion still stands: this buys
 nothing for timekeeping, and it was done because it was there to do.
