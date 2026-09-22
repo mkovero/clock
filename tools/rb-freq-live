@@ -30,9 +30,20 @@ Sign convention matches `gpsstat`: negative means the rubidium runs slow.
 
 Raised upstream on chrony-dev 2026-09-21: `chronyc -c` is documented for scripts
 but rounds frequency to 3 decimals of ppm while giving offsets 9, because
-`print_report()` in client.c sets prec = 3 for 'F'/'P' and 9 for 'O'/'S'. If that
-is changed, the frequency becomes readable straight out of `chronyc -c tracking`
-and this tool is only needed for its sub-second sampling. Thread:
+`print_report()` in client.c sets prec = 3 for 'F'/'P' and 9 for 'O'/'S'.
+
+The maintainer accepted it the same day and is implementing something better than
+the wider fixed precision that was proposed: a chronyc option for `%e` notation
+with the digits matched to the wire format. The chronyd<->chronyc protocol carries
+a custom 32-bit float -- 7-bit signed exponent, 25-bit signed coefficient, no
+hidden bit, value = 2^(exp-25) * coef (candm.h) -- so it holds about 7 significant
+digits relative. Fixed decimals are therefore wrong at both ends: 3 throws away
+everything at 1e-4 ppm, while 9 would print digits the float never carried at
+24 ppm. He reports hitting the same thing with skew reading 0.
+
+Once that lands, `chronyc -c tracking` gives the standing offset directly (2.2e-11
+is 2.2e-08 ppm, well inside the format's relative precision) and this tool is only
+needed for its sub-second sampling. Thread:
 https://www.mail-archive.com/chrony-dev@chrony.tuxfamily.org/
 """
 
