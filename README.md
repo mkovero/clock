@@ -17,8 +17,12 @@ One rubidium serves two separate goals:
    ptp4l serves it over PTP using the PHY's hardware timestamps.
 
 The rubidium supplies stability and the ZED-F9T supplies traceability. The AR-40A is
-never steered. Its frequency offset (about −2.56×10⁻⁹) stays on the raw 10 MHz, and chrony
-corrects it in the system clock against GNSS PPS.
+never electrically steered: whatever offset it has stays on the raw 10 MHz, and chrony
+corrects it in the system clock against GNSS PPS. It was trimmed mechanically on
+2026-09-21 from −2.55×10⁻⁹ to +2.2×10⁻¹¹ ([log](config/ar40a-trim-log.txt)), which is a
+state rather than a property — aging of 5×10⁻¹⁰/yr walks it past 1×10⁻¹¹ again in about a
+week. Trimming buys nothing for timekeeping, because chrony carries a static offset
+regardless; it matters only to whatever reads the raw 10 MHz.
 
 Acting as a Dante or AES67 grandmaster is not a goal.
 
@@ -69,28 +73,37 @@ the 5 V one.
 
 ## Typical performance
 
-Checked 2026-09-14. The dashboard has live values.
+Checked 2026-09-22. The dashboard has live values.
 
 | Quantity | Value |
 |---|---|
 | chrony | stratum 1, `PPS2` selected |
 | PPS2 jitter (chrony std dev) | 20–60 ns |
 | Receiver time accuracy (`tAcc`) | 1 ns |
-| Satellites used | ~50 (GPS, Galileo, BeiDou), PDOP ≈ 1 |
-| chrony max-error bound | ~41 µs |
-| AR-40A offset vs GNSS | −2.56×10⁻⁹ |
+| Satellites | ~20 used / ~38 seen (GPS, Galileo, BeiDou), PDOP ≈ 1 |
+| chrony max-error bound | ~37 µs |
+| AR-40A offset vs GNSS | +2.4×10⁻¹¹, trimmed 2026-09-21 |
+| Frequency resolution of the rig | a few ×10⁻¹² over hours |
 
 These figures describe jitter and servo quality, not absolute UTC bias. Fixed antenna
 LNA and receiver delays are still unmeasured. See [docs/timing.md](docs/timing.md#bias-and-error-budget).
+
+Counts before 2026-09-16 read roughly twice as high: `gpsstat` was counting one entry per
+*signal* rather than per satellite, so a satellite tracked on L1 and L2 counted twice.
+
+**The antenna sees about half the sky.** Azimuths from N clockwise to SSE return almost no
+carrier phase at any elevation, and something overhead costs 15 dB above 75°. It is
+structure, not the mount, and it is why PPP cannot resolve ambiguities here
+([hardware](docs/hardware.md#what-the-antenna-can-actually-see)).
 
 ## Repository
 
 | Path | Contents |
 |---|---|
 | `5351.ino` | Teensy 4.0 firmware: Si5351C setup, CLK4 gating, status reporting |
-| `tools/` | CM4-side scripts: `gpsstat` health check, receiver config, survey/PPP, dashboard collector |
+| `tools/` | CM4-side scripts: `gpsstat` health check, receiver config, survey/PPP, dashboard collector, `f9t-skymap`, `rb-freq-live`, `rb-adev` |
 | `dashboard/` | static status page and its deployment notes |
-| `config/` | ZED-F9T config backups, applied changes, survey and PPP results, dated reminders |
+| `config/` | ZED-F9T config backups and applied changes, `chrony.conf`, survey and PPP results, the AR-40A trim log, dated reminders |
 | `plan.md` | open work, next steps, and things deliberately not being done |
 
 ## Documentation
