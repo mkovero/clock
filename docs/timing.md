@@ -214,9 +214,18 @@ Consequences:
 - The AR-40A at 2.2×10⁻¹¹ sits about 7× above the floor, so it is genuinely measurable.
   The 2026-09-20/21 trim stopped at 2.8×10⁻¹¹, which was 0.90× chrony's own skew — that
   was the right place to stop, and this is why.
-- **Anything better than ~1×10⁻¹¹ is not resolvable on this rig.** An HP 5061A-class
-  caesium (~1×10⁻¹¹) would sit where the rubidium is now; a 5071A (±5×10⁻¹³) would be
-  below both this floor and the drift file's own 1×10⁻¹² print resolution.
+- **Anything better than ~1×10⁻¹¹ is not resolvable on this rig.** A 5071A-class caesium
+  at ±5×10⁻¹³ would be below both this floor and the drift file's own 1×10⁻¹² print
+  resolution — invisible twice over.
+- **Do not read the AR-40A's trimmed offset as comparable to a caesium.** It reads
+  2.2×10⁻¹¹ because it was trimmed against GNSS on 2026-09-21, and that number is
+  borrowed rather than owned. Aging at 5×10⁻¹⁰/yr is 1.4×10⁻¹² per day, so it passes
+  1×10⁻¹¹ in about a week and returns to today's figure in sixteen days; the ±2×10⁻¹⁰
+  temperature spec is nine times the whole trim residual. A caesium is a primary
+  standard: accurate by reference to the hyperfine transition that defines the second,
+  with no calibration and no expiry. The one fair comparison is the AR-40A's <3×10⁻¹²
+  ADEV at 100 s, which is respectable at that τ — but that is stability, not accuracy,
+  and caesium keeps improving with τ where rubidium walks off.
 - That is not a display problem to be fixed with more digits. At those levels the GNSS
   link is the limit: half the sky is blocked
   ([hardware](hardware.md#what-the-antenna-can-actually-see)), the stored position is good
