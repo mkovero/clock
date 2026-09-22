@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""rb-adev — overlapping Allan deviation of chrony's frequency estimate.
+
+    rb-adev [history.jsonl] [from-hour] [to-hour]
+
+Answers "what can this rig actually resolve", which is a different question from
+the AR-40A's own stability: the series is chrony's servo-filtered estimate read
+from the drift file, not a raw phase comparison.
+
+Two traps, both of which produced wrong answers before this was written:
+
+  * The drift file is written HOURLY, so 5-minute history re-reads one value about
+    twelve times. Nothing below tau = 1 h is independent.
+  * Overlapping ADEV differences m-point averages SEPARATED BY m. Differencing
+    adjacent sliding averages, which share m-1 of their m points, makes ADEV fall
+    as tau^-1 and flattered this rig by a factor of 60. adev_wrong() below is kept
+    deliberately so the two can be printed side by side.
+
+Measured 2026-09-22: a few e-12 over hours, cross-checked against the +/-8e-12
+that the hourly means wander overnight. See docs/timing.md.
+"""
+
+import json, math
+
+import sys
+PATH = sys.argv[1] if len(sys.argv) > 1 else "/home/mui/.local/state/clock-dashboard/history.jsonl"
+FROM = sys.argv[2] if len(sys.argv) > 2 else "2026-09-20T11"
+TO = sys.argv[3] if len(sys.argv) > 3 else "2026-09-21T08"
+rows = [json.loads(l) for l in open(PATH) if l.strip()]
+ser = [r["ref_freq_offset"] for r in rows
+       if r.get("ref_freq_offset") is not None
+       and FROM <= r.get("at","")[:13] <= TO]
+N = len(ser)
+T0 = 300.0
+print("N=%d, tau0=%.0f s, span %.1f h" % (N, T0, N*T0/3600))
+print()
+
+def adev_overlapping(y, m):
+    """Correct overlapping Allan deviation: difference m-point averages SEPARATED BY m."""
+    n = len(y)
+    if n < 2*m + 1:
+        return None, 0
+    avg = [sum(y[k:k+m])/m for k in range(n-m+1)]
+    terms = [(avg[k+m] - avg[k])**2 for k in range(len(avg)-m)]
+    return math.sqrt(sum(terms)/(2*len(terms))), len(terms)
+
+def adev_wrong(y, m):
+    """What I computed before: adjacent sliding averages, sharing m-1 points."""
+    n = len(y)
+    avg = [sum(y[k:k+m])/m for k in range(n-m+1)]
+    if len(avg) < 3:
+        return None
+    return math.sqrt(sum((avg[k+1]-avg[k])**2 for k in range(len(avg)-1))/(2*(len(avg)-1)))
+
+print("  tau        ADEV (correct)   n_pairs   [previous, buggy]")
+for m in (1, 2, 3, 6, 12, 24, 48, 96):
+    tau = m*T0
+    a, np_ = adev_overlapping(ser, m)
+    w = adev_wrong(ser, m)
+    lbl = "%.0f s" % tau if tau < 3600 else "%.1f h" % (tau/3600)
+    if a is None:
+        print("  %-10s  (span too short for this tau)" % lbl)
+    else:
+        print("  %-10s  %.2e        %4d      %.2e" % (lbl, a, np_, w))

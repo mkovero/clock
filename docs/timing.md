@@ -149,6 +149,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | `f9t-reminders` | date-gated reminders shown by `gpsstat` |
 | `chrony.conf` | copy of `/etc/chrony.conf`, tracked since 2026-09-21 |
 | `rb-freq-live` | AR-40A frequency offset live from `adjtimex`, for tuning the trimmer |
+| `rb-adev` | overlapping Allan deviation of the frequency series — what the rig can resolve |
 
 ## Bias and error budget
 
@@ -178,6 +179,50 @@ laboratory.
 | Ionospheric residual | few ns | reduced by dual-frequency GPS, Galileo and BeiDou |
 
 Fixed offsets are the dominant terms, and the largest of them are still unmeasured.
+
+### What the frequency readout can actually resolve
+
+Measured 2026-09-22 over 22 h of undisturbed `ref_freq_offset` (2026-09-20 11:00 to
+2026-09-21 09:00 UTC, after the trim had settled). Overlapping Allan deviation:
+
+| τ | ADEV |
+|---|---|
+| 1 h | 5.7×10⁻¹² |
+| 2 h | 4.1×10⁻¹² |
+| 4 h | 3.8×10⁻¹² |
+| 8 h | 2.8×10⁻¹² |
+
+**The floor is a few ×10⁻¹² over hours**, and it agrees with the independent check: the
+hourly means wandered ±8×10⁻¹² across that night.
+
+Three caveats, all of which make this a measure of the *readout*, not of the AR-40A:
+
+- The drift file is written **hourly**, so 5-minute sampling re-reads one value about
+  twelve times. Points below τ = 1 h are not independent and mean nothing.
+- The series is chrony's servo-filtered frequency estimate, not a raw phase comparison
+  against the PPS, so it is smoothed by the loop before anyone sees it.
+- Systematic terms from the table above — position, LNA and receiver delay — do not
+  average down at all. This is repeatability, not accuracy.
+
+> **Computing this correctly matters.** Overlapping Allan deviation differences m-point
+> averages **separated by m**. Differencing *adjacent* sliding averages, which share m−1
+> of their m points, makes ADEV fall as τ⁻¹ and produced a figure 60× too good before the
+> ±8×10⁻¹² overnight wander contradicted it.
+
+Consequences:
+
+- The AR-40A at 2.2×10⁻¹¹ sits about 7× above the floor, so it is genuinely measurable.
+  The 2026-09-20/21 trim stopped at 2.8×10⁻¹¹, which was 0.90× chrony's own skew — that
+  was the right place to stop, and this is why.
+- **Anything better than ~1×10⁻¹¹ is not resolvable on this rig.** An HP 5061A-class
+  caesium (~1×10⁻¹¹) would sit where the rubidium is now; a 5071A (±5×10⁻¹³) would be
+  below both this floor and the drift file's own 1×10⁻¹² print resolution.
+- That is not a display problem to be fixed with more digits. At those levels the GNSS
+  link is the limit: half the sky is blocked
+  ([hardware](hardware.md#what-the-antenna-can-actually-see)), the stored position is good
+  to 1.28 ns, and the antenna and receiver delays are unmeasured. A better reference would
+  have to be compared some other way — common-view against a laboratory, or a counter
+  against a second standard.
 
 ## Corrections: DGNSS no, PPP for position
 
