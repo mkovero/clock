@@ -31,11 +31,16 @@ work is in [plan.md](../plan.md).
 | ADEV (spec) | <3×10⁻¹¹ @ 1 s, <3×10⁻¹² @ 100 s |
 | Temperature (spec) | ±2×10⁻¹⁰ over −5…+50 °C |
 | Trim (spec) | trimmer under the calibration sticker, 1 turn ≈ 5×10⁻¹⁰, 10 turns total |
+| Trim (measured) | **clockwise raises frequency**, 4.888×10⁻¹⁰ per turn, linear across the 5.25 turns used on 2026-09-20/21 with no endstop reached ([log](../config/ar40a-trim-log.txt)) |
 | BIT | DB9 pin 3, open collector. It sinks to ground when locked |
 
-- **Frequency offset vs GNSS: −2.55×10⁻⁹ ±5×10⁻¹¹** since the 2026-09-11 power cycle,
-  consistent with years of normal aging. chrony corrects it in the system clock. Trimming
-  is discussed in plan.md Step 3b.
+- **Frequency offset vs GNSS: +2.2×10⁻¹¹**, mechanically trimmed there on 2026-09-21 from
+  the −2.55×10⁻⁹ it had held since the 2026-09-11 power cycle. **Read that as a state, not
+  a property.** Aging of 5×10⁻¹⁰/yr is 1.4×10⁻¹² per day, so it walks back past 1×10⁻¹¹
+  within about a week, and the ±2×10⁻¹⁰ temperature coefficient above is nine times the
+  whole trim residual. chrony corrects whatever the offset happens to be, so this reaches
+  only consumers of the raw 10 MHz. Why it was done, and why it bought nothing for
+  timekeeping: plan.md Step 3b and [the trim log](../config/ar40a-trim-log.txt).
 - The manual contradicts itself on BIT polarity. §2.1.2 is right (locked = shorted to
   ground) and §3.3 has the labels swapped. Years of the relay interlock confirmed this.
   The sink current is not specified.
@@ -76,7 +81,9 @@ maximum, and it ran that way for years.
 
 **In use**, fed from a DA output. Spec: 75 Ω, 1 Vpp nominal sine, self-biasing
 comparator front end. The actual termination has not been confirmed. Every Orion clock mode disciplines the same internal
-OCXO. The 10M input multiplies by ~×2.26 where word clock multiplies by ×512, so it adds
+OCXO — and it re-calibrated its clock DAC by itself after the 2026-09-21 rubidium trim,
+reading Err 0.0060 ppm before zeroing out, which is useful confirmation that a change to
+the 10 MHz reaches the output rather than only chrony's estimate of it. The 10M input multiplies by ~×2.26 where word clock multiplies by ×512, so it adds
 far less phase noise and is the right input.
 
 ## Si5351C-B breakout

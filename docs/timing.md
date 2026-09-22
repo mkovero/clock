@@ -85,7 +85,13 @@ gpsd silently stops feeding SHM(0) after a large clock step
 this:
 
 - `gpsd-after-timesync.service` runs `systemctl try-restart gpsd` after `time-sync.target`.
-- `gpsd-shm-watchdog.timer` checks every minute and restarts gpsd if SHM(0) has stopped.
+- `gpsd-shm-watchdog.timer` checks every minute and restarts gpsd after **two consecutive**
+  silent checks, at most once per 10 minutes.
+
+That two-check threshold means short silences never reach it. gpsd goes quiet for 36–113 s
+between 10 and 35 times a day, logging `gpsd SHM(0) silent (check 1)` and recovering on its
+own. Those used to take PPS2 down as well until `maxlockage` was raised
+([troubleshooting](troubleshooting.md#lock-nmea-took-pps2-down-with-every-gpsd-hiccup)).
 
 Do not order gpsd after `chrony-wait` instead. If the network is down at boot, chrony has
 no source, `chrony-wait` blocks, and gpsd, the only remaining time source, never starts.
@@ -143,13 +149,12 @@ page. See [dashboard/README.md](../dashboard/README.md).
 |---|---|
 | `f9t-config-ram.txt`, `f9t-config-flash.txt` | full CFG dump from 2026-09-10, taken **before** the timing changes. 945 keys, restorable |
 | `f9t-timing-changes.txt` | changes applied since then, with reasons (`ubx-apply-config … 7`) |
-| `f9t-known-good.txt` | timing-critical keys read back from a healthy receiver on 2026-09-15 (RAM == Flash); used by `f9t-restore`. Copied to `~/f9tcfg/` on aika |
+| `f9t-known-good.txt` | timing-critical keys read back from a healthy receiver on 2026-09-15 (RAM == Flash), TMODE position updated 2026-09-21; used by `f9t-restore`. **Carries the position too, so update it alongside `f9t-ppp-position.txt` or the next boot reverts.** Copied to `~/f9tcfg/` on aika |
 | `survey-2026-09-11.meta` | standalone survey result, superseded by PPP |
 | `ppp-2026-09-12.sum`, `ppp-2026-09-12-rapid.sum`, `f9t-ppp-position.txt` | CSRS-PPP reports (ultra-rapid, then rapid) and the TMODE keys written from the rapid one |
 | `f9t-reminders` | date-gated reminders shown by `gpsstat` |
 | `chrony.conf` | copy of `/etc/chrony.conf`, tracked since 2026-09-21 |
-| `rb-freq-live` | AR-40A frequency offset live from `adjtimex`, for tuning the trimmer |
-| `rb-adev` | overlapping Allan deviation of the frequency series — what the rig can resolve |
+| `ar40a-trim-log.txt` | every move of the AR-40A trimmer, with direction, sensitivity and travel used |
 
 ## Bias and error budget
 
@@ -280,4 +285,7 @@ for ubxtool.
 | `f9t-rawlog` | log RAWX/SFRBX for PPP without leaving fixed mode; checks UART margin first |
 | `f9t-ppp` | RAWX → RINEX via `convbin` for PPP submission |
 | `f9t-survey` | standalone position survey (rover mode), then write the result into TMODE |
+| `f9t-skymap` | C/N0 and carrier-phase yield by azimuth and elevation from a RAWX log — what the antenna can see |
+| `rb-freq-live` | AR-40A offset live from `adjtimex` at 1.5×10⁻¹¹, for turning the trimmer against a moving number |
+| `rb-adev` | overlapping Allan deviation of the frequency series — what the rig can resolve |
 | `ntrip-relay` | NTRIP client and local re-caster. Not used in steady state |
