@@ -119,7 +119,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | Setting | Value |
 |---|---|
 | Mode | `CFG-TMODE-MODE=2`, fixed LLA |
-| Position | 60.179598658°, 24.958725025°, 22.0279 m ellipsoidal (ITRF20). PPP on rapid products, written 2026-09-19, 0.38 m 3D (1σ, east widened) ≈ 1.28 ns. Keys in `config/f9t-ppp-position.txt` and `config/f9t-known-good.txt` |
+| Position | fixed, from PPP on rapid products, written 2026-09-19. 0.38 m 3D (1σ, east widened) ≈ 1.28 ns, ITRF20 ellipsoidal. Coordinates are not in this public repo — see [config/README.md](../config/README.md) |
 | Time pulse | TP2 1 Hz, 50% duty, `USE_LOCKED_TP2=1`, locked-only since 2026-09-14 |
 | Cable delay | `CFG-TP-ANT_CABLEDELAY=40` ns (8 m ÷ (0.66 c) = 40.4 ns). Excludes LNA and receiver delay |
 | Signals | GPS L1C/A + L2C, Galileo E1 + E5b, BeiDou B1I + B2I |
@@ -147,12 +147,9 @@ page. See [dashboard/README.md](../dashboard/README.md).
 
 | File | What |
 |---|---|
-| `f9t-config-ram.txt`, `f9t-config-flash.txt` | full CFG dump from 2026-09-10, taken **before** the timing changes. 945 keys, restorable |
 | `f9t-timing-changes.txt` | changes applied since then, with reasons (`ubx-apply-config … 7`) |
-| `f9t-known-good.txt` | timing-critical keys read back from a healthy receiver on 2026-09-15 (RAM == Flash), TMODE position updated 2026-09-21; used by `f9t-restore`. **Carries the position too, so update it alongside `f9t-ppp-position.txt` or the next boot reverts.** Copied to `~/f9tcfg/` on aika |
-| `survey-2026-09-11.meta` | standalone survey result, superseded by PPP |
-| `ppp-2026-09-12.sum`, `ppp-2026-09-12-rapid.sum`, `f9t-ppp-position.txt` | CSRS-PPP reports (ultra-rapid, then rapid) and the TMODE keys written from the rapid one |
 | `f9t-reminders` | date-gated reminders shown by `gpsstat` |
+| — | the PPP keyfile, `f9t-known-good.txt`, the survey and PPP reports and the full CFG dumps all carry the position, so they live in the private `mkovero/sys` repo instead ([config/README.md](../config/README.md)) |
 | `chrony.conf` | copy of `/etc/chrony.conf`, tracked since 2026-09-21 |
 | `ar40a-trim-log.txt` | every move of the AR-40A trimmer, with direction, sensitivity and travel used |
 

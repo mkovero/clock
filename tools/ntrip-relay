@@ -28,7 +28,7 @@ Usage:
     ntrip-relay --password-file ~/.dgnss --user mkovero \
                 --caster opencaster.nls.fi --port 2102 \
                 --mount DGNSS-MSM1 --listen 5757 \
-                --lat 60.1796447 --lon 24.9586922 --alt 19.0
+                --lat <deg> --lon <deg> --alt <m>   # receiver position
 
 then point gpsd at it:  ntrip://127.0.0.1:5757/DGNSS-MSM1
 

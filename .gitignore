@@ -5,3 +5,13 @@
 # Local Python bytecode from checking the dashboard collector.
 __pycache__/
 *.pyc
+
+# Files carrying the antenna's surveyed position, which identifies the building.
+# They live in the private mkovero/sys repo under clock-private/, and the live
+# copies the rig reads are in ~/f9tcfg on aika. See config/README.md.
+config/f9t-ppp-position.txt
+config/f9t-known-good.txt
+config/survey-*.meta
+config/ppp-*.sum
+config/f9t-config-ram.txt
+config/f9t-config-flash.txt

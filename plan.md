@@ -23,7 +23,7 @@ Last updated 2026-09-14.
 Finished and verified in Flash:
 
 ```
-lat 60.179612200   lon 24.958719200   height 22.138 m HAE
+lat/lon/height  ->  private repo, clock-private/survey-2026-09-11.meta
 FIXED_POS_ACC 1.432 m  ->  4.7 ns        ECEF fields cleared
 ```
 
@@ -74,11 +74,11 @@ position belongs in git.
 
 23.2 h of RAWX at 30 s through NRCan CSRS-PPP. The rapid-product run is what the
 receiver now holds, written to Flash and verified 2026-09-19. Reports kept as
-`config/ppp-2026-09-12.sum` (ultra-rapid) and `config/ppp-2026-09-12-rapid.sum`,
-keys as `config/f9t-ppp-position.txt` and again in `config/f9t-known-good.txt`.
+the PPP reports and TMODE keys are in the private repo under `clock-private/`
+(see [config/README.md](config/README.md)); they carry the position.
 
 ```
-lat 60.179598658   lon 24.958725025   hgt 22.0279 m ellipsoidal (ITRF20)
+lat/lon/height ellipsoidal (ITRF20)  ->  private repo, clock-private/f9t-ppp-position.txt
 sigma 0.38 m 3D (1 sigma, east widened)  ->  1.28 ns     FIXED_POS_ACC 3840
 ```
 

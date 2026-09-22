@@ -20,19 +20,42 @@ wide; a PPP solution is carried by carrier phase, and it cannot fix ambiguities
 in a part of the sky that never delivers any. A cell can sit at a usable-looking
 C/N0 and still be worthless at 0% yield.
 
-The default position is the one in config/f9t-ppp-position.txt. It only has to be
-good to a few metres — az/el is not sensitive to it.
+With no coordinates given, the position is read from ~/f9tcfg/f9t-ppp-position.txt
+on the rig. It is not carried in this repository, which is public: see config/README.md.
+Accuracy barely matters here — a kilometre of position error moves a satellite's
+apparent azimuth by about 0.003 degrees, against 10-degree bins — so any rough local
+position works if that file is absent.
 """
 
 import collections
 import datetime as dt
 import gzip
 import math
+import os
 import sys
 
 MU = {"G": 3.986005e14, "E": 3.986004418e14}
 OMEGA_E = 7.2921151467e-5
-DEFAULT_POS = (60.179598658, 24.958725025, 22.0279)
+POS_FILE = os.path.expanduser("~/f9tcfg/f9t-ppp-position.txt")
+
+
+def read_position(path=POS_FILE):
+    """Receiver position from a CFG-TMODE keyfile: LAT/LON in 1e-7 deg with a 1e-9
+    remainder, HEIGHT in cm with a 0.1 mm remainder."""
+    k = {}
+    try:
+        for line in open(path):
+            f = line.split()
+            if len(f) >= 2 and f[0].startswith("CFG-TMODE-"):
+                k[f[0][len("CFG-TMODE-"):]] = int(f[1])
+    except OSError:
+        return None
+    try:
+        return ((k["LAT"] + k.get("LAT_HP", 0) / 100.0) / 1e7,
+                (k["LON"] + k.get("LON_HP", 0) / 100.0) / 1e7,
+                (k["HEIGHT"] + k.get("HEIGHT_HP", 0) / 100.0) / 100.0)
+    except KeyError:
+        return None
 
 
 def fortran(s):
@@ -114,7 +137,13 @@ def main():
     if len(args) < 2:
         sys.exit(__doc__.strip().splitlines()[2].strip())
     obs_path, nav_path = args[0], args[1]
-    lat, lon, hgt = (tuple(float(x) for x in args[2:5]) if len(args) >= 5 else DEFAULT_POS)
+    if len(args) >= 5:
+        lat, lon, hgt = (float(x) for x in args[2:5])
+    else:
+        pos = read_position()
+        if pos is None:
+            sys.exit("no position: pass lat lon hgt, or run where %s exists" % POS_FILE)
+        lat, lon, hgt = pos
 
     rx = llh_ecef(lat, lon, hgt)
     sla, slo = math.radians(lat), math.radians(lon)
