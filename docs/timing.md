@@ -16,12 +16,13 @@ configured, and what the accuracy figures do and don't mean.
 ## The chain
 
 ```
-F9T TIME2 ──► PHY extts (/dev/ptp0) ──► chrony refclock PPS2 ─┐
+F9T TIME2 ──► PHY extts (/dev/ptp0) ─┬► chrony refclock PPS2 ─┐
+                                     │                        │
 F9T UART1 ──► gpsd ──► SHM(0) ──► chrony refclock NMEA ───────┤ (numbers the second)
-                                                              ▼
-                                                     CLOCK_REALTIME ──► chronyd NTP server
-                                                              │
-                                              phc2sys ──► PHC ──► ptp4l grandmaster
+                                     │                        ▼
+                                     │               CLOCK_REALTIME ──► chronyd NTP server
+                                     │
+                                     └► ts2phc ──► PHC ──► ptp4l grandmaster
 ```
 
 ### chrony (`/etc/chrony.conf`)
@@ -72,8 +73,44 @@ handles that through gpsd.
 
 - `ptp4l@eth0.service` runs ptp4l as grandmaster from `/etc/linuxptp/ptp4l.conf`.
   Arch's linuxptp package ships no systemd units, so these are local.
-- `phc2sys@eth0.service` runs `phc2sys -s CLOCK_REALTIME -c eth0` to push the
-  disciplined system clock into the PHC.
+- `ts2phc@eth0.service` runs `ts2phc -f /etc/linuxptp/ts2phc.conf -s generic -c eth0`
+  and disciplines the PHC **directly from the same PPS events** the PHY timestamps.
+  `-s generic` means a pulse without time of day, so only the sub-second part is
+  corrected and the whole seconds (TAI) are left alone. Config:
+
+  ```
+  [global]
+  leapfile /usr/share/zoneinfo/leap-seconds.list
+  ts2phc.pin_index 0
+  ts2phc.channel 0
+  ts2phc.extts_polarity rising
+  [eth0]
+  ```
+
+  `leapfile` is not optional: linuxptp's built-in leap-second table expired in June 2025,
+  and without the system file ts2phc rejects every sample with `source ts not valid`.
+  The `UTC-TAI offset not set in system! Trying to revert to leapfile` line at startup is
+  expected — the kernel's TAI offset is 0 because chrony is not configured with
+  `leapsectz`, so ts2phc uses the file instead.
+- `phc2sys@eth0.service` is **disabled** since 2026-09-26. It used to run
+  `phc2sys -s CLOCK_REALTIME -c eth0`, pushing the disciplined system clock into the PHC,
+  which put the slow PHC↔system transfer into the PHC's path. Measuring how far each PPS
+  timestamp lands from an exact PHC second gave, over 60–90 s:
+
+  | PHC disciplined by | mean | sd | p95 | max |
+  |---|---|---|---|---|
+  | phc2sys (system → PHC) | +9.6 ns | 137 ns | +92 ns | +980 ns |
+  | ts2phc (PPS → PHC) | −0.3 ns | 6.1 ns | +7 ns | +13 ns |
+
+  A PTP client two switches away improved from ±5.8 ms root dispersion to
+  +787 ns ±1.8 µs. The system clock is unaffected: chrony still disciplines
+  CLOCK_REALTIME from the same events, and each reader of `/dev/ptp0` gets its own
+  event queue, so nothing is stolen from chrony. Thanks to @jclark for the suggestion
+  (`mkovero/clock#1`).
+- **Holdover caveat.** With no GNSS fix there are no pulses, and the PHC then free-runs on
+  whatever clocks the PHY rather than on the rubidium-derived 54 MHz that CLOCK_REALTIME
+  keeps. phc2sys used to give the PHC that holdover for free. A fallback that starts
+  phc2sys when the pulses stop is not built yet.
 - `eee-off@eth0.service` runs `ethtool --set-eee eth0 eee off` before ptp4l starts.
   Energy Efficient Ethernet ruins PTP latency, and on 7.2 the `genet.eee=N` kernel option
   is ignored.

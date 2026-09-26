@@ -46,7 +46,7 @@ AccuBeat AR-40A rubidium ── 10 MHz sine
    │  XIN ← 54 MHz (crystal removed)           │
    │  PHY PHC /dev/ptp0 ← PPS on J2 pin 9      │ eth0
    │  ttyAMA0 ← UBX/NMEA, 460800               ├────► NTP + PTP
-   │  chrony · gpsd · ptp4l · phc2sys          │
+   │  chrony · gpsd · ptp4l · ts2phc           │
    └───────────────────────────────────────────┘
         ▲ TIME2 1 PPS        ▲ UART1
         └──── u-blox ZED-F9T ┘
@@ -64,8 +64,9 @@ cannot boot from.
 **Time path.** The F9T runs in fixed-position timing mode at a PPP-surveyed position. Its
 TIME2 pulse is timestamped by the CM4's BCM54210PE PHY. chrony reads that timestamp as
 its `PPS2` refclock and uses gpsd's NMEA only to label which second each pulse belongs
-to. phc2sys copies the disciplined system clock back into the PHC for ptp4l. Three MIKES
-NTP servers act as a millisecond-level sanity check.
+to. The same pulse events also discipline the PHC directly through ts2phc, which ptp4l serves
+as grandmaster (sd 6 ns, against 137 ns when the PHC was copied from the system clock by
+phc2sys). Three MIKES NTP servers act as a millisecond-level sanity check.
 
 **Power.** A MeanWell RS-15-5 feeds three separate 5 V runs (CM4, Si5351 + Teensy, F9T).
 The AR-40A has its own 15 V supply, and its negative rail is deliberately not tied to
