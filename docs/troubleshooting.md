@@ -25,7 +25,7 @@ copy of `config/f9t-config-ram.txt` (every line is `<key> <value>`), then re-app
 
 ## PHY missing after a warm reboot
 
-*2026-09-15.* After a reboot the CM4 can come up with no Ethernet at all:
+*2026-09-15, updated 2026-09-26.* After a reboot the CM4 can come up with no Ethernet at all:
 
 ```
 mdio_bus unimac-mdio--19: MDIO device at address 0 is missing.
@@ -36,17 +36,26 @@ bcmgenet fd580000.ethernet eth0: failed to connect to PHY
 The rest of the system boots normally; there is simply no network, and with no console login the box is
 unreachable. Observed on several kernels, so it is not a kernel regression.
 
-- **Trigger:** warm reboots. Cold boots have not failed.
+- **The PHY is not dead: it answers at MDIO address 2 instead of 0.** A debug scan of all 32 addresses on a
+  failing boot finds `PHYSID=0x600d84a2` at address 2 and nothing at 0, on normal and `sysrq-b` reboots alike.
+  A scan taken at the same early stage on a good boot finds address 0 only. Raspberry Pi confirmed in
+  [raspberrypi/linux#5497](https://github.com/raspberrypi/linux/issues/5497) that the PHY's LED pins double as
+  address straps while it resets, so a reset that samples the wrong level lands on the wrong address.
+- **Mitigation in `config.txt`: `dtparam=eth_led1=4`** turns the CM4's yellow Ethernet LED (PHY LED3) off. With it
+  driven as a link LED every warm reboot failed (0 of 12); with it off, 8 of 11 survived.
+- **What decides the rest is the moment of the reset within the UTC second**: with LED3 off, resets in one half of
+  the second come back at address 2 and in the other half at address 0 (20 of 20 either way, `sysrq-b` fired at a
+  chosen phase). Disabling the F9T's TP2 pulse entirely does not change that, so the PPS on `SYNC_OUT` is not the
+  trigger; what marks the second is still unidentified. Planned reboots timed to the good half have not failed.
 - **Recovery:** switch the **whole 5 V supply** off for ~30 s (leave the rubidium's 15 V on), then on. A power cycle
-  of the CM4 alone is not reliable, and neither is another reboot.
-- **Why:** the BCM54210PE has no reset line that a warm reboot asserts, and the PHY driver writes `BMCR_PDOWN` when
-  the interface goes down, so the next kernel has to wake a PHY that may no longer answer MDIO. The exact mechanism
-  is still open; upstream tracks the same signature in
-  [raspberrypi/linux#5497](https://github.com/raspberrypi/linux/issues/5497).
-- **Ruled out here:** the GNSS PPS on the PHY's SYNC pin, back-powering of the CM4 from the other 5 V devices
-  (3V3 measures 28 mV with the CM4's own feed removed), and the `brcm,powerdown-enable` device-tree property.
+  of the CM4 alone is not reliable, and neither is another reboot. A debug kernel patch that follows the PHY to
+  whichever address answers restores the network on a failed boot and has been used for remote testing.
+- **Ruled out:** the `BMCR_PDOWN` write at shutdown (`sysrq-b` skips it and still fails), back-powering of the CM4
+  from the other 5 V devices (3V3 measures 28 mV with the CM4's own feed removed), and the F9T PPS itself.
+  `brcm,powerdown-enable` in the device tree was cleared with too few reboots to count and is open again.
 
-Plan reboots of the timing host for when someone can power-cycle the rig.
+Plan reboots of the timing host for when someone can power-cycle the rig, unless a kernel with the
+follow-the-address patch is running.
 
 ## Dead RTC → gpsd → chrony
 

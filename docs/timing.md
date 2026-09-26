@@ -6,10 +6,12 @@ configured, and what the accuracy figures do and don't mean.
 ## Host
 
 - **Arch Linux ARM** since 2026-09-14, replacing Ubuntu.
-- **Kernel `linux-aika-rt` 7.2.5**, PREEMPT_RT, built from the Raspberry Pi Foundation
-  fork and packaged locally with a bcmgenet hardware-timestamping patch. PHY timestamping
-  (`bcm_phy_ptp`) depends on that kernel. The kernel and image build trees are outside
-  this repo.
+- **Kernel `linux-aika-rt` 7.2.6**, PREEMPT_RT, built from the Raspberry Pi Foundation
+  fork and packaged locally. PHY timestamping (`bcm_phy_ptp`) depends on two local
+  patches, both prepared for netdev: hardware-timestamping ioctls reaching phylib when
+  the MAC has no `ndo_hwtstamp` callbacks (a v7.0 regression that breaks PHY PTP on the
+  CM4), and an EXTTS fix so reading the PHC no longer eats pending pulse events (~14 % of
+  pulses were lost). The kernel and image build trees are outside this repo.
 - `ethtool -T eth0` should report hardware transmit/receive with the PHY as timestamp
   source.
 
@@ -57,8 +59,10 @@ lock_all
   at +52 ms and +105 ms. Each step makes `sourcestats` drop its samples; it is cosmetic.
 - **MIKES** servers sit ~1 ms from the local clock with ~10 ms error bars. They are a
   sanity check, not a reference.
-- There is no `/dev/pps0`. gpsd logs `unable to read /dev/pps0` on startup, and that
-  message is harmless.
+- `/dev/pps0` exists (gpsd attaches the PPS line discipline to `ttyAMA0`) but carries no
+  pulses: DCD is not wired, so `ppstest` only times out. The PPS that matters goes to the
+  PHY, not to a UART handshake line. gpsd's startup `unable to read /dev/pps0` error is a
+  race against the device appearing, and is harmless.
 - Use the drift file (`ref_freq_offset` in `gpsstat`) to judge rubidium frequency.
   `chronyc tracking` rounds to 1×10⁻⁹.
 
