@@ -185,10 +185,30 @@ Software is described in [timing.md](timing.md).
   the rubidium ÷10⁷ PPS from the planned [timing board](timing-board.md) (UBX-TIM-TM2).
 - **Header:** +5V, GND, RX(2)/TX(2), TIME(2)/TIME(1), EXTINT, READY, SCL/SPI_CLK,
   SDA/SPI_CS, USB D−/D+, RX/SPI_MOSI, TX/SPI_MISO. The SEL pad chooses UART+I²C or SPI.
-- **Antenna run:** 8 m (5 m + 3 m, solid PE, VF 0.66), giving a 40 ns cable delay. The
-  antenna moved on 2026-09-11 but the cable stayed the same. If the run is re-made,
-  recalculate the delay at ≈5 ns/m. The shield bonding point and surge protection have
-  not been inspected.
+- **Antenna: u-blox ANN-MB series** (sold as Eltehs ELT0012), multi-band L1 + L2/E5b/B2I
+  patch with a built-in LNA and **SAW pre-filter**, 82 × 60 × 22.5 mm, IP67, magnetic base.
+  From the [u-blox data sheet](https://content.u-blox.com/sites/default/files/documents/ANN-MB_DataSheet_UBX-18049862.pdf)
+  (UBX-18049862): LNA gain typ. 28 ± 3 dB, NF max 2.8 dB (L1) / 3.2 dB (L2), output VSWR
+  max 2.0, supply 3.0–5.0 V at typ. 15 mA, out-of-band rejection typ. 65–85 dB. The F9T
+  feeds that supply up the coax and reports it: `UBX-MON-RF` shows `antStatus 2` (OK),
+  `antPower 1`.
+- **Phase centre** (same data sheet, on a 120 mm ground plane): offset < 5 mm horizontally
+  and **8.9 mm up** at L1 (7.6 mm at L2), variation < 5 mm (L1) / < 10 mm (L2). The stored
+  PPP position therefore refers to a point ~9 mm above the antenna reference point. That is
+  ~30 ps, irrelevant to timing, and below the current 0.38 m position uncertainty — but it
+  becomes worth carrying if ambiguity fixing ever brings that down to centimetres.
+- **No group delay is published.** Neither the u-blox data sheet nor the reseller sheet
+  gives a group delay or group-delay variation for the antenna. The 10–30 ns in the
+  [error budget](timing.md#bias-and-error-budget) is an estimate for a SAW-filtered GNSS
+  antenna, not a manufacturer figure, and the SAW rather than the amplifier dominates it.
+- **Antenna run:** 8 m = the antenna's own moulded **5 m RG-174** plus a 3 m extension
+  (solid PE, VF 0.66), giving 5.05 ns/m × 8 m ≈ **40.4 ns**, configured as
+  `CFG-TP-ANT_CABLEDELAY = 40`. The antenna moved on 2026-09-11 but the cable stayed the
+  same. If the run is re-made, recalculate at ≈5 ns/m. Only the 3 m extension can be
+  measured on its own (TDR/VNA): the antenna's cable is moulded on, so patch + LNA + 5 m
+  is one sealed block — which is exactly the "antenna + cable assembly" a calibration lab
+  treats as a single delay. The shield bonding point and surge protection have not been
+  inspected.
 - **Cable temperature:** PTFE coax (RG-178, RG-316) steps its delay by a few hundred ppm
   around 19–21 °C. PE is better through room temperature. This matters most on the
   antenna feed.

@@ -213,9 +213,9 @@ laboratory.
 
 | Term | Size | Status |
 |---|---|---|
-| Antenna cable delay | 35 ns | corrected (5 → 40 ns), calculated not measured |
+| Antenna cable delay | 35 ns | corrected (5 → 40 ns), calculated not measured: 5 m moulded RG-174 + 3 m extension at 5.05 ns/m ≈ 40.4 ns |
 | Stored position | 1.28 ns | PPP on rapid products, 2026-09-19 (was ~19 ns after the antenna move) |
-| Antenna LNA group delay | typically 10–30 ns | uncompensated, not measurable on the rig |
+| Antenna LNA group delay | est. 10–30 ns | uncompensated, not measurable on the rig. **u-blox publishes no group delay for the ANN-MB**, so this is a typical SAW-filtered-antenna figure, not a spec ([hardware](hardware.md)) |
 | Receiver internal delay | unknown | uncompensated, not measurable on the rig |
 | chrony PPS2 jitter | 20–60 ns | random, averages out |
 | Receiver `tAcc` | 1 ns | — |
