@@ -300,6 +300,37 @@ gpsd quirks found along the way, encoded in `tools/ntrip-relay`:
 
 Restructuring so the relay owns the port is not worth it for a 0.5 m service.
 
+### Comparing against UTC(MIKE)
+
+MIKES submits **PPP time-transfer files to the BIPM** and they are public:
+`https://webtai.bipm.org/ftp/pub/tai/data/<year>/time_transfer/ppp/mikeYYMM.gpi`. CGGTTS-style
+header, `REF = UTC(MIKE)`, a `Cal_Id` (their station is calibrated), their ITRF position and
+their delays (`INT DLY`, `CAB DLY 215.4 ns`, `REF DLY 8.6 ns`), then 5-minute rows of
+`REFGPS` = UTC(MIKE) − GPS time in ns, tagged by MJD. Files appear monthly and cover ~34 days,
+so a September run needs `mike2609.gpi`, published in the following weeks.
+
+`tools/ppp-vs-utcmike` downloads that file and differences it against the per-epoch receiver
+clock in a CSRS-PPP `.pos` (from the **full** result archive, not the `.sum`):
+
+```
+tools/ppp-vs-utcmike --fetch 2609 --ppp full_output.pos
+```
+
+The difference is our receiver clock minus UTC(MIKE), with orbit and satellite-clock errors
+largely common to both sites. **It does not calibrate the PPS.** PPP sees the receiver's
+internal clock, not the TP2 edge, so the F9T's internal delay stays unknown; what the
+comparison can catch is a wrong cable delay, a wrong position or a modelling error, at the
+few-ns level. The mean also carries our uncompensated antenna, LNA and cable delays, which is
+exactly the lump a laboratory calibration would resolve.
+
+**CGGTTS was tried first and parked** (2026-09-29). `rnx2cggtts` 1.0.2 builds (pin `time` to
+0.3.41 first) and writes a valid CGGTTS header from our RINEX, but produces **zero tracks**:
+it rejects RINEX v3 clock products as "invalid file type", and fails candidate formation with
+"at least one pseudo range observation is mandatory" on our GPS observables (the F9T logs
+`C1C` with L2C as `C2L`/`C2S`). Since MIKES submits PPP rather than common-view tracks anyway,
+the PPP route above is the direct comparison; CGGTTS would need a solver config or a patched
+tool.
+
 **PPP** (RAWX → RINEX → NRCan CSRS-PPP) gave the stored position, using precise orbit and
 clock products with no dependence on another receiver's clock. The rapid-product rerun
 of 2026-09-19 is the one in Flash. It is still a float solution, and the reason is the

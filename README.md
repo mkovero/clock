@@ -102,7 +102,7 @@ structure, not the mount, and it is why PPP cannot resolve ambiguities here
 | Path | Contents |
 |---|---|
 | `5351.ino` | Teensy 4.0 firmware: Si5351C setup, CLK4 gating, status reporting |
-| `tools/` | CM4-side scripts: `gpsstat` health check, receiver config, survey/PPP, dashboard collector, `f9t-skymap`, `rb-freq-live`, `rb-adev` |
+| `tools/` | CM4-side scripts: `gpsstat` health check, receiver config, survey/PPP, dashboard collector, `f9t-skymap`, `rb-freq-live`, `rb-adev`, `ppp-vs-utcmike` (compare our PPP clock against UTC(MIKE) via the BIPM's public files) |
 | `dashboard/` | static status page and its deployment notes |
 | `config/` | ZED-F9T config backups and applied changes, `chrony.conf`, survey and PPP results, the AR-40A trim log, dated reminders |
 | `plan.md` | open work, next steps, and things deliberately not being done |

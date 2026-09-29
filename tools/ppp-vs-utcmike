@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""ppp-vs-utcmike — compare our PPP receiver-clock solution against UTC(MIKE).
+
+MIKES submits PPP time-transfer files to the BIPM (CGGTTS-style, PRN 99 rows, 5-minute
+values of REFGPS = UTC(MIKE) - GPS time, in ns). They are public, and their station is
+calibrated (Cal_Id in the header), so differencing our own PPP clock against theirs gives
+
+    ours - theirs = (our receiver clock) - UTC(MIKE)
+
+over the same epochs, with satellite orbit and clock errors largely common to both.
+
+What this does NOT give: the delay between the F9T's internal clock and the TP2 edge that
+actually drives the PHY. PPP sees the receiver clock, not the pulse. Treat the result as a
+check on cable delay, position and modelling at the few-ns level, not as a calibration of
+the PPS (docs/timing.md, "Bias and error budget").
+
+Usage:
+    ppp-vs-utcmike --mike mike2609.gpi --ppp full_output.pos
+    ppp-vs-utcmike --fetch 2609 --ppp full_output.pos      # download the MIKES file first
+    ppp-vs-utcmike --mike mike2609.gpi --list              # what MJDs does it cover
+
+The CSRS-PPP side is the .pos file from the full result archive (not the .sum). The clock
+column is found by name; pass --ppp-clock-col if the header ever changes.
+"""
+
+import argparse
+import re
+import sys
+import urllib.request
+
+BIPM = "https://webtai.bipm.org/ftp/pub/tai/data/{year}/time_transfer/ppp/{name}"
+
+
+def fetch_mike(yymm, out):
+    """Download mikeYYMM.gpi from the BIPM public archive."""
+    name = f"mike{yymm}.gpi"
+    url = BIPM.format(year=2000 + int(yymm[:2]), name=name)
+    print(f"fetching {url}")
+    with urllib.request.urlopen(url, timeout=120) as r, open(out, "wb") as f:
+        f.write(r.read())
+    return out
+
+
+def read_mike(path):
+    """Yield (mjd, seconds_of_day, refgps_ns) from a BIPM PPP (.gpi) file."""
+    rows, header = [], {}
+    for line in open(path, errors="replace"):
+        line = line.rstrip("\r\n")
+        if "=" in line and not line.startswith(" "):
+            k, _, v = line.partition("=")
+            header.setdefault(k.strip(), v.strip())
+        f = line.split()
+        # PRN 99 marks the all-in-view PPP solution; REFGPS is the last numeric field
+        if len(f) >= 6 and f[0] == "99" and f[1].isdigit():
+            mjd, hhmmss = int(f[1]), f[2]
+            sod = int(hhmmss[:2]) * 3600 + int(hhmmss[2:4]) * 60 + int(hhmmss[4:6])
+            try:
+                rows.append((mjd, sod, float(f[5])))
+            except ValueError:
+                continue
+    return header, rows
+
+
+def read_ppp(path, clock_col=None):
+    """Yield (mjd, seconds_of_day, clock_ns) from a CSRS-PPP .pos file."""
+    rows, cols, idx = [], None, None
+    for line in open(path, errors="replace"):
+        f = line.split()
+        if not f:
+            continue
+        if cols is None:
+            # the header row names the columns; find the receiver clock one
+            cand = [i for i, c in enumerate(f) if re.fullmatch(clock_col or r"(RX)?CLK\(?ns\)?|CLK", c, re.I)]
+            if cand and any(c.upper().startswith(("YEAR", "DAY", "MJD", "DIR")) for c in f):
+                cols, idx = f, cand[0]
+            continue
+        try:
+            mjd, sod = epoch_of(f, cols)
+            rows.append((mjd, sod, float(f[idx])))
+        except (ValueError, IndexError, KeyError):
+            continue
+    if cols is None:
+        sys.exit("could not find a clock column in the .pos file; pass --ppp-clock-col")
+    return rows
+
+
+def epoch_of(f, cols):
+    """Get (mjd, seconds_of_day) from a CSRS-PPP row using its header names."""
+    by = {c.upper(): i for i, c in enumerate(cols)}
+    for key in ("MJD", "DAYOFYEAR"):
+        if key in by:
+            break
+    hms = next((f[by[k]] for k in ("HR:MN:SS.SS", "HH:MM:SS", "TIME") if k in by), None)
+    if hms is None:
+        raise KeyError("time column")
+    h, m, s = (float(x) for x in hms.split(":"))
+    sod = int(h * 3600 + m * 60 + s)
+    if "MJD" in by:
+        return int(float(f[by["MJD"]])), sod
+    # else derive MJD from YEAR + DAYOFYEAR
+    import datetime
+    y = int(float(f[by["YEAR"]])); doy = int(float(f[by["DAYOFYEAR"]]))
+    d = datetime.date(y, 1, 1) + datetime.timedelta(days=doy - 1)
+    return d.toordinal() - 678576, sod
+
+
+def pair(ours, theirs, tol=15):
+    """Match our epochs to theirs within tol seconds."""
+    theirs_by = {(m, s): v for m, s, v in theirs}
+    out = []
+    for m, s, v in ours:
+        for d in range(0, tol + 1):
+            for cand in ((m, s - d), (m, s + d)):
+                if cand in theirs_by:
+                    out.append((m, s, v, theirs_by[cand]))
+                    break
+            else:
+                continue
+            break
+    return out
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--mike", help="BIPM PPP file (mikeYYMM.gpi)")
+    p.add_argument("--fetch", metavar="YYMM", help="download that month's MIKES file first")
+    p.add_argument("--ppp", help="CSRS-PPP .pos file from the full result archive")
+    p.add_argument("--ppp-clock-col", help="regex for the clock column name in the .pos header")
+    p.add_argument("--list", action="store_true", help="just report what the MIKES file covers")
+    a = p.parse_args()
+
+    path = a.mike
+    if a.fetch:
+        path = path or f"mike{a.fetch}.gpi"
+        fetch_mike(a.fetch, path)
+    if not path:
+        sys.exit("need --mike or --fetch")
+
+    header, theirs = read_mike(path)
+    mjds = sorted({m for m, _, _ in theirs})
+    print(f"{path}: {len(theirs)} rows, MJD {mjds[0]}..{mjds[-1]}, "
+          f"REF={header.get('REF', '?')}, {header.get('COMMENTS', '')[:60]}")
+    print(f"  their delays: INT {header.get('INT DLY', '?')} | CAB {header.get('CAB DLY', '?')} | "
+          f"REF {header.get('REF DLY', '?')}")
+    if a.list or not a.ppp:
+        return
+
+    ours = read_ppp(a.ppp, a.ppp_clock_col)
+    if not ours:
+        sys.exit("no epochs parsed from the .pos file")
+    print(f"{a.ppp}: {len(ours)} epochs, MJD {min(m for m, _, _ in ours)}..{max(m for m, _, _ in ours)}")
+
+    both = pair(ours, theirs)
+    if not both:
+        sys.exit("no overlapping epochs — is the MIKES month right for these MJDs?")
+
+    diffs = [o - t for _, _, o, t in both]
+    diffs.sort()
+    n = len(diffs)
+    mean = sum(diffs) / n
+    sd = (sum((d - mean) ** 2 for d in diffs) / n) ** 0.5
+    print(f"\nmatched {n} epochs")
+    print(f"our clock - UTC(MIKE):  mean {mean:+.1f} ns  sd {sd:.1f} ns  "
+          f"median {diffs[n // 2]:+.1f}  min {diffs[0]:+.1f}  max {diffs[-1]:+.1f}")
+    print("\nThat mean includes our uncompensated antenna, LNA, cable and receiver delays,")
+    print("and says nothing about the TP2 edge itself. See docs/timing.md.")
+
+
+if __name__ == "__main__":
+    main()
