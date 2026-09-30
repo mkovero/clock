@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""ppp-clk-adev — overlapping Allan deviation of a receiver clock from a PPP clock file.
+
+    ppp-clk-adev <file.clk> [station]
+
+Input is the RINEX CLOCK file from a CSRS-PPP full result archive (`AR` records: the
+receiver clock offset against GPS/IGS time, in seconds, one per observation epoch).
+
+This characterises the GNSS receiver's own oscillator — on aika the ZED-F9T's internal
+TCXO, which nothing disciplines. It says nothing about the rubidium (which drives the CM4)
+nor about the 1 PPS the receiver outputs (which the receiver steers). See
+docs/timing.md, "Comparing against UTC(MIKE)".
+
+ADEV is computed on phase data:
+
+    sigma_y(tau)^2 = 1 / (2 tau^2 (N-2m)) * sum (x[i+2m] - 2 x[i+m] + x[i])^2
+
+The second difference cancels a constant frequency offset, so no detrending is done or
+wanted; a linear frequency drift remains visible as a rising tau^+1 slope. Gaps are kept
+as gaps: a term is skipped unless all three of its samples exist.
+"""
+
+import math
+import sys
+
+
+def read_clk(path, station=None):
+    """Return (tau0, [phase or None, ...]) from the AR records of a RINEX CLOCK file."""
+    import datetime
+    rows = []
+    for line in open(path, errors="replace"):
+        if not line.startswith("AR "):
+            continue
+        f = line.split()
+        if station and f[1].upper() != station.upper():
+            continue
+        t = datetime.datetime(int(f[2]), int(f[3]), int(f[4]), int(f[5]), int(f[6])) \
+            + datetime.timedelta(seconds=float(f[7]))
+        rows.append((t, float(f[9])))
+    if len(rows) < 3:
+        sys.exit(f"{path}: fewer than 3 AR records")
+    rows.sort()
+    rows = destep(rows)
+    steps = sorted((b[0] - a[0]).total_seconds() for a, b in zip(rows, rows[1:]))
+    tau0 = steps[len(steps) // 2]                      # median spacing
+    t0 = rows[0][0]
+    n = int(round((rows[-1][0] - t0).total_seconds() / tau0)) + 1
+    x = [None] * n
+    for t, v in rows:
+        i = int(round((t - t0).total_seconds() / tau0))
+        if 0 <= i < n:
+            x[i] = v
+    return tau0, x, rows
+
+
+def destep(rows, thresh=1e-4):
+    """Remove receiver clock steps: a GNSS receiver lets its clock drift, then jumps it back.
+
+    Those jumps are not oscillator behaviour and would dominate every ADEV point. A step is a
+    first difference more than `thresh` away from the median one; everything after it is
+    shifted back by the jump. Steps are reported, since a series full of them is a warning in
+    itself.
+    """
+    diffs = sorted(b[1] - a[1] for a, b in zip(rows, rows[1:]))
+    med = diffs[len(diffs) // 2]
+    out, shift, steps = [rows[0]], 0.0, []
+    for (ta, va), (tb, vb) in zip(rows, rows[1:]):
+        d = vb - va
+        if abs(d - med) > thresh:
+            shift += d - med
+            steps.append((tb, d))
+        out.append((tb, vb - shift))
+    for t, d in steps:
+        print(f"  clock step {d*1e3:+.3f} ms at {t} — removed")
+    return out
+
+
+def adev(x, tau0, m):
+    """Overlapping ADEV at tau = m*tau0, skipping terms that touch a gap."""
+    tau, s, k = m * tau0, 0.0, 0
+    for i in range(len(x) - 2 * m):
+        a, b, c = x[i], x[i + m], x[i + 2 * m]
+        if a is None or b is None or c is None:
+            continue
+        s += (c - 2 * b + a) ** 2
+        k += 1
+    if k < 2:
+        return None, 0
+    return math.sqrt(s / (2 * tau * tau * k)), k
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    path = sys.argv[1]
+    station = sys.argv[2] if len(sys.argv) > 2 else None
+    tau0, x, rows = read_clk(path, station)
+    have = sum(v is not None for v in x)
+    span = (rows[-1][0] - rows[0][0]).total_seconds()
+    print(f"{path}: {have} of {len(x)} epochs, tau0 {tau0:g} s, span {span/3600:.1f} h")
+    print(f"clock offset: {rows[0][1]*1e6:+.1f} us -> {rows[-1][1]*1e6:+.1f} us "
+          f"({(rows[-1][1]-rows[0][1])/span*1e6:+.4f} ppm average)")
+
+    # least-squares line: the mean frequency offset ADEV is blind to
+    n = have
+    sx = sum(i * tau0 for i, v in enumerate(x) if v is not None)
+    sy = sum(v for v in x if v is not None)
+    sxx = sum((i * tau0) ** 2 for i, v in enumerate(x) if v is not None)
+    sxy = sum(i * tau0 * v for i, v in enumerate(x) if v is not None)
+    slope = (n * sxy - sx * sy) / (n * sxx - sx * sx)
+    print(f"fitted frequency offset: {slope*1e6:+.4f} ppm")
+
+    print(f"\n{'tau':>8}  {'ADEV':>11}  {'pairs':>7}")
+    m = 1
+    while m * tau0 <= span / 4:
+        a, k = adev(x, tau0, m)
+        if a:
+            tau = m * tau0
+            label = f"{tau:.0f} s" if tau < 3600 else f"{tau/3600:.2g} h"
+            print(f"{label:>8}  {a:11.2e}  {k:7d}")
+        m *= 2
+
+
+if __name__ == "__main__":
+    main()

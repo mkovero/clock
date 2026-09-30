@@ -223,6 +223,40 @@ laboratory.
 
 Fixed offsets are the dominant terms, and the largest of them are still unmeasured.
 
+### The F9T's own oscillator (byproduct of PPP, 2026-09-30)
+
+The clock series in a CSRS-PPP result is the receiver's **free-running TCXO** against GPS/IGS
+time — nothing steers it, and it is not the 1 PPS. `tools/ppp-clk-adev` turns that into an
+Allan deviation, which comes free with any PPP run:
+
+```
+tools/ppp-clk-adev aika-20260912-0942.clk
+```
+
+From the 23.2 h final-products run (2768 epochs at 30 s):
+
+| τ | ADEV |
+|---|---|
+| 30 s | 1.2×10⁻⁹ |
+| 2 min | 2.0×10⁻⁹ |
+| 8 min | 3.2×10⁻⁹ |
+| 1.1 h | 4.5×10⁻⁹ |
+| 4.3 h | 9.5×10⁻⁹ |
+
+Rising with τ, i.e. dominated by drift and temperature rather than noise, which is what a
+TCXO does. For scale the AR-40A reads 5.7×10⁻¹² at 1 h, about 800× better, and it is the
+rubidium — through the 54 MHz into the CM4 — that carries aika's frequency. The F9T's crystal
+only has to be good enough to hold the receiver's own solution together between fixes.
+
+**Two things to know before trusting such a series:**
+
+- **The receiver steps its clock.** Two jumps in 23 h, −25.986 ms and −23.986 ms, at roughly
+  15 h intervals: the crystal runs **+0.456 ppm** fast, drift accumulates ~25 ms, and the
+  receiver puts it back. `ppp-clk-adev` removes and reports the steps; leaving them in gives
+  ~2×10⁻⁵ at every τ, which is what the jumps measure, not the oscillator.
+- **This says nothing about TP2.** The pulse is steered against the receiver's own solution and
+  never appears in the PPP clock.
+
 ### What the frequency readout can actually resolve
 
 Measured 2026-09-22 over 22 h of undisturbed `ref_freq_offset` (2026-09-20 11:00 to
