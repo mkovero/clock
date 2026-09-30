@@ -340,6 +340,29 @@ def public_history(samples: list[dict], now: datetime) -> list[dict]:
     return compact
 
 
+def read_tcxo_adev(path: Path) -> dict | None:
+    """Allan deviation of the GNSS receiver's own TCXO, from the last PPP run.
+
+    Written occasionally by `ppp-clk-adev --json`, not by this collector: it needs a CSRS-PPP
+    clock file, which only exists after a RAWX session is processed. Missing or unreadable is
+    normal and simply leaves the field out.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    points = [p for p in data.get("points", [])
+              if isinstance(p.get("tau_s"), (int, float)) and isinstance(p.get("adev"), (int, float))]
+    if not points:
+        return None
+    return {
+        "measured_to": data.get("measured_to"),
+        "source": data.get("source"),
+        "freq_offset_ppm": data.get("freq_offset_ppm"),
+        "points": points,
+    }
+
+
 def main() -> int:
     state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
     parser = argparse.ArgumentParser(description=__doc__)
@@ -351,6 +374,10 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("data.json"))
     parser.add_argument("--survey-meta", type=Path,
                         default=Path.home() / "f9t-survey/survey.meta")
+    parser.add_argument("--tcxo-adev", type=Path,
+                        default=state_home / "clock-dashboard/tcxo-adev.json",
+                        help="ADEV of the receiver's own oscillator, written by ppp-clk-adev "
+                             "--json after a PPP run (optional; omitted from output if absent)")
     parser.add_argument("--retention-days", type=float, default=DEFAULT_RETENTION_DAYS)
     parser.add_argument("--timeout", type=float, default=45.0)
     args = parser.parse_args()
@@ -409,6 +436,7 @@ def main() -> int:
                 "older_seconds": 3600,
             },
             "samples": public_history(samples, now),
+            **({"tcxo_adev": tcxo} if (tcxo := read_tcxo_adev(args.tcxo_adev)) else {}),
         })
 
     print(f"clock-dashboard: wrote {len(samples)} samples to {args.output}")

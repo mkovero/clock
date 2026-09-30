@@ -248,6 +248,12 @@ TCXO does. For scale the AR-40A reads 5.7×10⁻¹² at 1 h, about 800× better,
 rubidium — through the 54 MHz into the CM4 — that carries aika's frequency. The F9T's crystal
 only has to be good enough to hold the receiver's own solution together between fixes.
 
+`--json out.json` writes the same table for the dashboard: `clock-dashboard --tcxo-adev` picks it
+up (default `~/.local/state/clock-dashboard/tcxo-adev.json`) and publishes it as `tcxo_adev`,
+which the page shows as a "receiver oscillator stability" card with the measurement date. The
+collector never computes it — it needs a CSRS-PPP clock file — so the card simply stays hidden
+until a PPP run produces one.
+
 **Two things to know before trusting such a series:**
 
 - **The receiver steps its clock.** Two jumps in 23 h, −25.986 ms and −23.986 ms, at roughly
