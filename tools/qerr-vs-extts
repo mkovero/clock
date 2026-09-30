@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""TP1 qErr vs TP2's PHY timestamp, paired by GPS time-of-week (not arrival time)."""
+import os, re, select, struct, subprocess, sys, time
+
+SECS = int(sys.argv[1]) if len(sys.argv) > 1 else 240
+FMT, SZ = "qIIII I I", 32
+GPS_EPOCH = 315964800          # 1980-01-06 in Unix seconds
+TAI_GPS = 19                   # PHC carries TAI; GPS = TAI - 19 s
+
+ubx = subprocess.Popen(["ubxtool", "-w", str(SECS + 15), "-v", "3",
+                        "localhost:2947:/dev/ttyAMA0"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                       bufsize=1, env={**os.environ, "UBXOPTS": "-P 29.00"})
+fd = os.open("/dev/ptp0", os.O_RDONLY)
+poll = select.poll()
+poll.register(fd, select.POLLIN)
+poll.register(ubx.stdout.fileno(), select.POLLIN)
+
+extts, timtp = {}, {}
+pat = re.compile(r"towMS (\d+) towSubMS (\d+) qErr (-?\d+)")
+deadline = time.time() + SECS
+while time.time() < deadline:
+    for event_fd, _ in poll.poll(1000):
+        if event_fd == fd:
+            buf = os.read(fd, SZ)
+            if len(buf) == SZ:
+                sec, nsec, *_ = struct.unpack(FMT, buf)
+                off = nsec if nsec < 500_000_000 else nsec - 1_000_000_000
+                whole = sec + (1 if nsec >= 500_000_000 else 0)      # the intended second, TAI
+                tow_ms = ((whole - TAI_GPS - GPS_EPOCH) % 604800) * 1000
+                extts[tow_ms] = off
+        else:
+            m = pat.search(ubx.stdout.readline() or "")
+            if m:
+                timtp[int(m.group(1))] = int(m.group(3)) / 1000.0     # ps -> ns
+ubx.terminate(); os.close(fd)
+
+print(f"EXTTS {len(extts)}  TIM-TP {len(timtp)}")
+
+def sd(v):
+    m = sum(v) / len(v)
+    return (sum((x - m) ** 2 for x in v) / len(v)) ** 0.5
+
+def corr(a, b):
+    n = len(a); ma, mb = sum(a)/n, sum(b)/n
+    va = sum((x-ma)**2 for x in a)**0.5; vb = sum((y-mb)**2 for y in b)**0.5
+    return sum((x-ma)*(y-mb) for x, y in zip(a, b))/(va*vb) if va and vb else 0.0
+
+print(f"\n{'lag(s)':>6}  {'pairs':>6}  {'corr':>7}  {'sd(extts)':>11}  {'sd(extts-qErr)':>15}")
+best = None
+for lag in (-1, 0, 1):
+    xs = [(extts[t], timtp[t + lag*1000]) for t in sorted(extts) if t + lag*1000 in timtp]
+    if len(xs) < 20:
+        continue
+    a = [x for x, _ in xs]; b = [y for _, y in xs]
+    r = corr(a, b); resid = [x-y for x, y in xs]
+    print(f"{lag:>6}  {len(xs):>6}  {r:>7.3f}  {sd(a):>10.2f} ns  {sd(resid):>14.2f} ns")
+    if best is None or abs(r) > abs(best[1]):
+        best = (lag, r, sd(a), sd(resid), len(xs))
+if best:
+    lag, r, s0, s1, n = best
+    print(f"\nbest lag {lag} s over {n} pairs: r = {r:+.3f}, scatter {s0:.2f} -> {s1:.2f} ns "
+          f"({100*(1-s1/s0):+.0f}%)")
+    print("qErr range: %+.2f .. %+.2f ns" % (min(timtp.values()), max(timtp.values())))
