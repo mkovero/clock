@@ -328,9 +328,26 @@ The missing link is the receiver's own tie between its clock and the pulse:
 PPS - GPS time = (PPS - receiver clock, from UBX-TIM-TP) - (receiver clock - GPS time, from PPP)
 ```
 
-So a RAWX session intended for time transfer must log **UBX-TIM-TP** as well, and it must be
-established whether the F9T reports TIM-TP for TP2 (the pulse feeding the PHY) or only for TP1
-(unwired here). Until then `tools/ppp-vs-utcmike` is plumbing, not a measurement.
+So a RAWX session intended for time transfer must log **UBX-TIM-TP** as well.
+
+**Measured 2026-09-30: TIM-TP describes TP1, not TP2.** Enabling `CFG-MSGOUT-UBX_TIM_TP_UART1`
+in RAM gives one message per second with `qErr` in picoseconds (±3.5 ns sawtooth observed),
+`flags (timebase:GNSS UTC:OK RAIM:active qErr:Valid TP:Locked)` and `refInfo (GNSS:Galileo)`.
+Setting TP1's period to 2 s left the cadence at 1 Hz (inconclusive), but **disabling TP1
+stopped TIM-TP entirely**, so the message follows TP1. TP2 — the pulse that feeds the PHY and
+therefore the whole timing chain — has no quantisation-error reporting. Both were restored
+afterwards; PPS2 stayed selected at stratum 1 throughout.
+
+Consequences:
+
+- **The qErr correction (SatPulse-style) is not available for our pulse** unless TP1 becomes the
+  one wired to J2 pin 9, or unless it is shown that both pulses share the same quantisation.
+  Both are 1 Hz on the same time grid with `ALIGN_TO_TOW`, so their edges should coincide, but
+  that is an assumption until the two outputs are compared on a scope.
+- **Both pulses sit on time grid 4 = Galileo** (`CFG-TP-TIMEGRID_TP1/TP2`), confirmed by
+  `refInfo (GNSS:Galileo)`. Any comparison against a GPS-time reference such as the BIPM's
+  `REFGPS` therefore carries the Galileo-to-GPS time offset (GGTO, a few ns).
+- `tools/ppp-vs-utcmike` stays plumbing until one of those is resolved.
 
 **CGGTTS was tried first and parked** (2026-09-29). `rnx2cggtts` 1.0.2 builds (pin `time` to
 0.3.41 first) and writes a valid CGGTTS header from our RINEX, but produces **zero tracks**:
