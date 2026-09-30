@@ -393,6 +393,27 @@ stopped TIM-TP entirely**, so the message follows TP1. TP2 — the pulse that fe
 therefore the whole timing chain — has no quantisation-error reporting. Both were restored
 afterwards; PPS2 stayed selected at stratum 1 throughout.
 
+**Can TP1's qErr stand in for TP2? Tested 2026-09-30: no.** `tools/qerr-vs-extts` logs TIM-TP
+(TP1's qErr) and the PHY's own EXTTS timestamps of TP2 at the same time, pairing them by GPS
+time of week. Over 236 pulses:
+
+| lag | pairs | correlation | sd(EXTTS) | sd(EXTTS − qErr) |
+|---|---|---|---|---|
+| −1 s | 236 | +0.222 | 6.20 ns | 6.10 ns |
+| 0 | 237 | −0.104 | 6.21 ns | 6.79 ns |
+| +1 s | 237 | −0.063 | 6.27 ns | 6.77 ns |
+
+qErr swung −4.03 to +3.68 ns (sd ≈ 2.3 ns), so if TP2 carried the same sawtooth the scatter
+should have dropped about 15 %. It dropped 2 %. The pulses do not share a correctable
+quantisation error, so **rewiring the PHY's pulse to TP1 stays the only way to get qErr for the
+pulse that matters** — and re-running this tool afterwards is its acceptance test, since the
+correlation should then appear.
+
+Caveats on the negative result: ts2phc was steering the PHC from the same events during the
+capture, and the PHY's timestamp resolution is 8 ns (sd ≈ 2.3 ns by itself), so part of the
+6.2 ns is measurement floor. Neither can manufacture a correlation, but a cleaner run would stop
+ts2phc first, at the price of letting the PHC free-run meanwhile.
+
 Consequences:
 
 - **The qErr correction (SatPulse-style) is not available for our pulse** unless TP1 becomes the
