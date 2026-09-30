@@ -263,6 +263,21 @@ until a PPP run produces one.
 - **This says nothing about TP2.** The pulse is steered against the receiver's own solution and
   never appears in the PPP clock.
 
+### Allan deviation on the dashboard
+
+`clock-dashboard` computes the AR-40A's overlapping ADEV from its own history on every run and
+publishes it as `ref_adev`; the page shows it as a "reference oscillator stability" card. Method
+and traps are those of `tools/rb-adev`: chrony writes the drift file hourly, so the series is
+bucketed to one value per UTC hour and tau starts at 1 h, and the overlapping estimator
+differences m-point averages separated by m.
+
+It uses the longest gap-free run inside the **last 7 days**, which matters more than it sounds.
+The same series over the 19 days to 2026-09-30 gives 2.8×10⁻¹⁰ at 1 h, because a trim, several
+kernel swaps and power cycles fall inside it; the last 48 h give 8.1×10⁻¹², matching the quiet
+22 h window measured on 2026-09-22 (5.7×10⁻¹²). A frequency step is a real event, and ADEV
+cannot tell it from noise — so read the card as "how the rig has behaved lately", and expect
+maintenance to inflate it for days.
+
 ### What the frequency readout can actually resolve
 
 Measured 2026-09-22 over 22 h of undisturbed `ref_freq_offset` (2026-09-20 11:00 to

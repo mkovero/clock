@@ -340,6 +340,62 @@ def public_history(samples: list[dict], now: datetime) -> list[dict]:
     return compact
 
 
+def ref_freq_adev(samples: list[dict], window_hours: int = 24 * 7) -> dict | None:
+    """Overlapping Allan deviation of the AR-40A, from chrony's frequency estimate.
+
+    Two traps, both of which produced wrong answers before `tools/rb-adev` was written:
+
+    * chrony writes the drift file HOURLY, so the 5-minute samples repeat each value about
+      twelve times. Nothing below tau = 1 h is independent, so the series is bucketed to one
+      value per UTC hour first and tau0 is 1 h.
+    * Overlapping ADEV differences m-point averages SEPARATED BY m. Differencing adjacent
+      sliding averages, which share m-1 of their m points, makes ADEV fall as tau^-1 and
+      flatters the rig by a factor of about 60.
+
+    Only the longest gap-free run inside the last `window_hours` is used, so an outage splits
+    the series rather than being averaged across. The window matters: over the 19 days to
+    2026-09-30 this reads 2.8e-10 at 1 h, because a trim, several kernel swaps and power
+    cycles sit inside it, while the last 48 h of the same series reads 8.1e-12 — the honest
+    figure for an undisturbed rig. Frequency steps are real events, not noise, and ADEV cannot
+    tell the difference. Returns None when the run is too short for even tau = 2 h.
+    """
+    hourly: dict[str, float] = {}
+    for item in samples:
+        value = item.get("ref_freq_offset")
+        at = item.get("at")
+        if isinstance(value, (int, float)) and isinstance(at, str):
+            hourly[at[:13]] = value        # last sample of each UTC hour wins
+
+    if len(hourly) < 5:
+        return None
+    keys = sorted(hourly)[-window_hours:]
+    runs, run = [], [hourly[keys[0]]]
+    for previous, key in zip(keys, keys[1:]):
+        gap = datetime.fromisoformat(key + ":00:00+00:00") - datetime.fromisoformat(previous + ":00:00+00:00")
+        if gap == timedelta(hours=1):
+            run.append(hourly[key])
+        else:
+            runs.append(run)
+            run = [hourly[key]]
+    runs.append(run)
+    series = max(runs, key=len)
+    if len(series) < 5:
+        return None
+
+    points = []
+    for m in (1, 2, 3, 6, 12, 24):
+        if len(series) < 2 * m + 1:
+            break
+        averages = [sum(series[k:k + m]) / m for k in range(len(series) - m + 1)]
+        terms = [(averages[k + m] - averages[k]) ** 2 for k in range(len(averages) - m)]
+        points.append({"tau_s": m * 3600.0, "adev": math.sqrt(sum(terms) / (2 * len(terms))),
+                       "pairs": len(terms)})
+    if not points:
+        return None
+    return {"tau0_s": 3600.0, "hours": len(series), "window_hours": window_hours,
+            "points": points}
+
+
 def read_tcxo_adev(path: Path) -> dict | None:
     """Allan deviation of the GNSS receiver's own TCXO, from the last PPP run.
 
@@ -437,6 +493,7 @@ def main() -> int:
             },
             "samples": public_history(samples, now),
             **({"tcxo_adev": tcxo} if (tcxo := read_tcxo_adev(args.tcxo_adev)) else {}),
+            **({"ref_adev": rb} if (rb := ref_freq_adev(samples)) else {}),
         })
 
     print(f"clock-dashboard: wrote {len(samples)} samples to {args.output}")
