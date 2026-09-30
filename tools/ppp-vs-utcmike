@@ -9,10 +9,18 @@ calibrated (Cal_Id in the header), so differencing our own PPP clock against the
 
 over the same epochs, with satellite orbit and clock errors largely common to both.
 
-What this does NOT give: the delay between the F9T's internal clock and the TP2 edge that
-actually drives the PHY. PPP sees the receiver clock, not the pulse. Treat the result as a
-check on cable delay, position and modelling at the few-ns level, not as a calibration of
-the PPS (docs/timing.md, "Bias and error budget").
+**Read this before trusting the output.** Measured 2026-09-30 on a CSRS-PPP .clk from this
+station: the receiver clock PPP solves for is the F9T's *free-running TCXO*, +589 us to
+-11222 us over 23 h, drifting -0.141 ppm. MIKES's REFGPS is tens of ns. Differencing the two
+as-is measures our crystal, not our timing output, and is useless for calibration.
+
+To make the comparison mean something, the PPS has to be tied to the receiver clock:
+
+    PPS - GPS time = (PPS - receiver clock, from UBX-TIM-TP) - (receiver clock - GPS time, PPP)
+
+so a RAWX session for this purpose must log UBX-TIM-TP alongside. Whether the F9T reports
+TIM-TP for TP2 (our pulse) or only TP1 is unresolved. Until that is settled, this tool is
+only good for parsing and plumbing, not for a number you can quote.
 
 Usage:
     ppp-vs-utcmike --mike mike2609.gpi --ppp full_output.pos

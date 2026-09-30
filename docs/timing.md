@@ -316,12 +316,21 @@ clock in a CSRS-PPP `.pos` (from the **full** result archive, not the `.sum`):
 tools/ppp-vs-utcmike --fetch 2609 --ppp full_output.pos
 ```
 
-The difference is our receiver clock minus UTC(MIKE), with orbit and satellite-clock errors
-largely common to both sites. **It does not calibrate the PPS.** PPP sees the receiver's
-internal clock, not the TP2 edge, so the F9T's internal delay stays unknown; what the
-comparison can catch is a wrong cable delay, a wrong position or a modelling error, at the
-few-ns level. The mean also carries our uncompensated antenna, LNA and cable delays, which is
-exactly the lump a laboratory calibration would resolve.
+**As it stands this comparison is not usable, and the 2026-09-30 finals run shows why.** The
+clock CSRS-PPP reports is the F9T's free-running TCXO: +589 us at the start, -11222 us 23 h
+later, drifting -0.141 ppm. MIKES's REFGPS is tens of ns. Differencing them measures our
+crystal. TP2 is corrected against the receiver's own solution and never appears in the PPP
+clock, as the error-budget section above already noted.
+
+The missing link is the receiver's own tie between its clock and the pulse:
+
+```
+PPS - GPS time = (PPS - receiver clock, from UBX-TIM-TP) - (receiver clock - GPS time, from PPP)
+```
+
+So a RAWX session intended for time transfer must log **UBX-TIM-TP** as well, and it must be
+established whether the F9T reports TIM-TP for TP2 (the pulse feeding the PHY) or only for TP1
+(unwired here). Until then `tools/ppp-vs-utcmike` is plumbing, not a measurement.
 
 **CGGTTS was tried first and parked** (2026-09-29). `rnx2cggtts` 1.0.2 builds (pin `time` to
 0.3.41 first) and writes a valid CGGTTS header from our RINEX, but produces **zero tracks**:
