@@ -207,8 +207,8 @@ Software is described in [timing.md](timing.md).
   same. If the run is re-made, recalculate at ≈5 ns/m. Only the 3 m extension can be
   measured on its own (TDR/VNA): the antenna's cable is moulded on, so patch + LNA + 5 m
   is one sealed block — which is exactly the "antenna + cable assembly" a calibration lab
-  treats as a single delay. The shield bonding point and surge protection have not been
-  inspected.
+  treats as a single delay. **The antenna feed's shield bonds directly to PE** (confirmed
+  2026-09-30). Surge protection has not been inspected.
 - **Cable temperature:** PTFE coax (RG-178, RG-316) steps its delay by a few hundred ppm
   around 19–21 °C. PE is better through room temperature. This matters most on the
   antenna feed.
