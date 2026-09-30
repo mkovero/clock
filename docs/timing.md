@@ -403,16 +403,30 @@ time of week. Over 236 pulses:
 | 0 | 237 | −0.104 | 6.21 ns | 6.79 ns |
 | +1 s | 237 | −0.063 | 6.27 ns | 6.77 ns |
 
-qErr swung −4.03 to +3.68 ns (sd ≈ 2.3 ns), so if TP2 carried the same sawtooth the scatter
-should have dropped about 15 %. It dropped 2 %. The pulses do not share a correctable
-quantisation error, so **rewiring the PHY's pulse to TP1 stays the only way to get qErr for the
-pulse that matters** — and re-running this tool afterwards is its acceptance test, since the
-correlation should then appear.
+Raw correlation is weak because slow wander dominates. **First-differencing** the series kills
+that wander and leaves the per-second sawtooth, which is where the answer is. Over 283
+consecutive pairs (ts2phc running; differencing makes the servo irrelevant):
 
-Caveats on the negative result: ts2phc was steering the PHC from the same events during the
-capture, and the PHY's timestamp resolution is 8 ns (sd ≈ 2.3 ns by itself), so part of the
-6.2 ns is measurement floor. Neither can manufacture a correlation, but a cleaner run would stop
-ts2phc first, at the price of letting the PHC free-run meanwhile.
+```
+slope d(extts)/d(qErr) = -1.556 +/- 0.162      correlation -0.497
+sd d(extts) 8.84 ns   sd d(qErr) 2.82 ns
+```
+
+So TP1's qErr **does** carry real information about TP2's edge — 9.6 sigma from zero — but the
+slope is 3.4 sigma away from the −1.000 that a shared quantisation would give. The pulses are
+related, not identical. Correcting TP2 with a fitted −1.56 × qErr removes about 25 % of the
+variance (13 % of the scatter); a clean 1:1 correction is not available.
+
+Conclusion: **rewiring the PHY's pulse to TP1 remains the right fix** if qErr matters, and
+re-running this tool afterwards is its acceptance test — the slope should then come out at −1.
+The empirical 1.5× factor is a curiosity, possibly different rounding granularity in the two
+pulse generators; it is not understood.
+
+A free-running variant (ts2phc stopped, the tool holding the EXTTS channel open itself via
+`--enable-extts`, since stopping ts2phc otherwise disables the channel and starves chrony too)
+gave the same picture with far worse SNR: the PHY's oscillator wanders ~95 ns over four minutes,
+differenced correlation −0.36. Not worth the disturbance: it also cost the downstream PTP client
+its lock.
 
 Consequences:
 

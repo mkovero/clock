@@ -11,7 +11,15 @@ ubx = subprocess.Popen(["ubxtool", "-w", str(SECS + 15), "-v", "3",
                         "localhost:2947:/dev/ttyAMA0"],
                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                        bufsize=1, env={**os.environ, "UBXOPTS": "-P 29.00"})
-fd = os.open("/dev/ptp0", os.O_RDONLY)
+want_enable = "--enable-extts" in sys.argv
+fd = os.open("/dev/ptp0", os.O_RDWR if want_enable else os.O_RDONLY)
+if want_enable:
+    # ts2phc normally owns this request; with ts2phc stopped nothing enables the channel and
+    # no events arrive (which also starves chrony). PTP_EXTTS_REQUEST2, index 0, rising edge.
+    import fcntl
+    PTP_EXTTS_REQUEST2 = 0x40103D0B
+    fcntl.ioctl(fd, PTP_EXTTS_REQUEST2, struct.pack("IIII", 0, 0x1 | 0x2, 0, 0))
+    print("EXTTS channel 0 enabled by this tool (rising edge)")
 poll = select.poll()
 poll.register(fd, select.POLLIN)
 poll.register(ubx.stdout.fileno(), select.POLLIN)
@@ -37,6 +45,16 @@ ubx.terminate(); os.close(fd)
 
 print(f"EXTTS {len(extts)}  TIM-TP {len(timtp)}")
 
+def detrend(ts, ys):
+    """Remove a best-fit line: with ts2phc stopped the PHC free-runs and the residual ramps."""
+    n = len(ts)
+    mt, my = sum(ts)/n, sum(ys)/n
+    den = sum((t-mt)**2 for t in ts)
+    if den == 0:
+        return ys
+    k = sum((t-mt)*(y-my) for t, y in zip(ts, ys))/den
+    return [y - (my + k*(t-mt)) for t, y in zip(ts, ys)]
+
 def sd(v):
     m = sum(v) / len(v)
     return (sum((x - m) ** 2 for x in v) / len(v)) ** 0.5
@@ -52,11 +70,25 @@ for lag in (-1, 0, 1):
     xs = [(extts[t], timtp[t + lag*1000]) for t in sorted(extts) if t + lag*1000 in timtp]
     if len(xs) < 20:
         continue
-    a = [x for x, _ in xs]; b = [y for _, y in xs]
-    r = corr(a, b); resid = [x-y for x, y in xs]
-    print(f"{lag:>6}  {len(xs):>6}  {r:>7.3f}  {sd(a):>10.2f} ns  {sd(resid):>14.2f} ns")
+    keys = [t for t in sorted(extts) if t + lag*1000 in timtp]
+    a = detrend(keys, [x for x, _ in xs]); b = [y for _, y in xs]
+    r = corr(a, b); resid = [x-y for x, y in zip(a, b)]
+    # first differences kill any residual slow wander and keep the fast sawtooth
+    da = [a[i+1]-a[i] for i in range(len(a)-1)]
+    db = [b[i+1]-b[i] for i in range(len(b)-1)]
+    rd = corr(da, db)
+    print(f"{lag:>6}  {len(xs):>6}  {r:>7.3f}  {sd(a):>10.2f} ns  {sd(resid):>14.2f} ns   diff-corr {rd:+.3f}")
     if best is None or abs(r) > abs(best[1]):
         best = (lag, r, sd(a), sd(resid), len(xs))
+if "--save" in sys.argv:
+    out = sys.argv[sys.argv.index("--save") + 1]
+    with open(out, "w") as f:
+        f.write("tow_ms,extts_ns,qerr_ns\n")
+        for t in sorted(extts):
+            if t in timtp:
+                f.write(f"{t},{extts[t]},{timtp[t]}\n")
+    print(f"saved pairs to {out}")
+
 if best:
     lag, r, s0, s1, n = best
     print(f"\nbest lag {lag} s over {n} pairs: r = {r:+.3f}, scatter {s0:.2f} -> {s1:.2f} ns "
