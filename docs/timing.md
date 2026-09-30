@@ -160,7 +160,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 | Setting | Value |
 |---|---|
 | Mode | `CFG-TMODE-MODE=2`, fixed LLA |
-| Position | fixed, from PPP on rapid products, written 2026-09-19. 0.38 m 3D (1σ, east widened) ≈ 1.28 ns, ITRF20 ellipsoidal. Coordinates are not in this public repo — see [config/README.md](../config/README.md) |
+| Position | fixed, from PPP on rapid products, written 2026-09-19 and confirmed against final products 2026-09-30 (2.8 mm apart, still `IAR 0.00%`). 0.38 m 3D (1σ, east widened) ≈ 1.28 ns, ITRF20 ellipsoidal. Coordinates are not in this public repo — see [config/README.md](../config/README.md) |
 | Time pulse | TP2 1 Hz, 50% duty, `USE_LOCKED_TP2=1`, locked-only since 2026-09-14 |
 | Cable delay | `CFG-TP-ANT_CABLEDELAY=40` ns (8 m ÷ (0.66 c) = 40.4 ns). Excludes LNA and receiver delay |
 | Signals | GPS L1C/A + L2C, Galileo E1 + E5b, BeiDou B1I + B2I |
@@ -214,7 +214,7 @@ laboratory.
 | Term | Size | Status |
 |---|---|---|
 | Antenna cable delay | 35 ns | corrected (5 → 40 ns), calculated not measured: 5 m moulded RG-174 + 3 m extension at 5.05 ns/m ≈ 40.4 ns |
-| Stored position | 1.28 ns | PPP on rapid products, 2026-09-19 (was ~19 ns after the antenna move) |
+| Stored position | 1.28 ns | PPP on rapid products, 2026-09-19; **re-run against final products 2026-09-30 moved it 2.8 mm (0.01 ns) with identical sigmas, so the stored values stand** (was ~19 ns after the antenna move) |
 | Antenna LNA group delay | est. 10–30 ns | uncompensated, not measurable on the rig. **u-blox publishes no group delay for the ANN-MB**, so this is a typical SAW-filtered-antenna figure, not a spec ([hardware](hardware.md)) |
 | Receiver internal delay | unknown | uncompensated, not measurable on the rig |
 | chrony PPS2 jitter | 20–60 ns | random, averages out |

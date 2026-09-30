@@ -1,4 +1,3 @@
 # Date-gated reminders surfaced by gpsstat, and so by the dashboard.
 # Format: YYYY-MM-DD|message   (shown from that date onward)
 
-2026-09-30|Optional: resubmit ~/ppp/aika-20260912-0942.obs.gz to CSRS-PPP against FINAL products. Expect little: the 2026-09-19 rapid run was still float (IAR 0.00%) because half the observations carry no carrier phase, which products cannot fix. If it moves the position, update config/f9t-ppp-position.txt AND config/f9t-known-good.txt, or f9t-restore reverts it at boot.
