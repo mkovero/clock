@@ -329,7 +329,9 @@ it rejects RINEX v3 clock products as "invalid file type", and fails candidate f
 "at least one pseudo range observation is mandatory" on our GPS observables (the F9T logs
 `C1C` with L2C as `C2L`/`C2S`). Since MIKES submits PPP rather than common-view tracks anyway,
 the PPP route above is the direct comparison; CGGTTS would need a solver config or a patched
-tool.
+tool. Reported upstream as
+[nav-solutions/rinex#450](https://github.com/nav-solutions/rinex/issues/450) (the project moved
+from `georust` to `nav-solutions`).
 
 **PPP** (RAWX → RINEX → NRCan CSRS-PPP) gave the stored position, using precise orbit and
 clock products with no dependence on another receiver's clock. The rapid-product rerun
