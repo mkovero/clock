@@ -34,6 +34,7 @@ PUBLIC_SAMPLE_KEYS = (
     "holdover_us_per_day", "trim_turns", "mikes_sources",
     "mode", "survey_started", "survey_duration_hours", "survey_elapsed_hours",
     "survey_progress_percent", "survey_ready",
+    "temps",
 )
 STATUS_RE = re.compile(r"^  (OK|WARN|FAIL|NOTE)\s+(.*)$")
 NUMBER_RE = re.compile(r"([+-]?[0-9]+(?:\.[0-9]+)?)\s*(ns|us|ms|s|seconds?)?", re.I)
@@ -396,6 +397,93 @@ def ref_freq_adev(samples: list[dict], window_hours: int = 24 * 7) -> dict | Non
             "points": points}
 
 
+def read_temperatures(extra: list[str] | None = None) -> dict[str, float]:
+    """Every kernel thermal zone, plus any sensor named on the command line, in degrees C.
+
+    The enclosure is closed from 2026-09-30, which makes temperature part of the frequency
+    record rather than a curiosity: a rubidium moves a few parts in 10^11 across its rated
+    range, so a few degrees is the same size as what this rig is trying to measure. The CM4
+    die is not the rubidium's baseplate, but with the lid on it is a usable proxy for the
+    case, and it also reports the CPU load that heats the case in the first place. An actual
+    baseplate sensor goes in through --temp-sensor when one is fitted.
+
+    Values are read as millidegrees when they exceed 200, which is how the kernel reports
+    thermal zones, hwmon tempN_input and 1-Wire `temperature` alike, and as degrees below
+    that. A sensor that cannot be read is left out rather than reported as zero.
+    """
+    temps: dict[str, float] = {}
+    for zone in sorted(Path("/sys/class/thermal").glob("thermal_zone*")):
+        try:
+            name = (zone / "type").read_text(encoding="utf-8").strip()
+            raw = float((zone / "temp").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        # "cpu-thermal" and the like; keep the short form, it is what the card shows
+        temps[name.removesuffix("-thermal") or name] = raw / 1000.0 if abs(raw) > 200 else raw
+    for spec in extra or []:
+        name, _, path = spec.partition("=")
+        if not name or not path:
+            print(f"clock-dashboard: ignoring --temp-sensor {spec!r}, want NAME=PATH", file=sys.stderr)
+            continue
+        try:
+            raw = float(Path(path).read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        temps[name] = raw / 1000.0 if abs(raw) > 200 else raw
+    return temps
+
+
+def temp_freq_sensitivity(samples: list[dict], window_hours: int = 24 * 7) -> dict | None:
+    """Least-squares sensitivity of the reference frequency to temperature, per sensor.
+
+    The question the closed enclosure raises is whether case temperature — and through it
+    CPU load — moves the rubidium. This fits frequency against each temperature and reports
+    the slope with its correlation, so a real thermal coefficient can be told apart from two
+    series that merely drift in the same week.
+
+    Bucketed to one value per UTC hour for the same reason `ref_freq_adev` is: chrony writes
+    the drift file hourly, so the five-minute samples repeat it about twelve times and would
+    otherwise inflate every count twelvefold without adding information.
+
+    A correlation is not a mechanism. With CPU heat and rubidium heat sharing one enclosure,
+    a slope here says the two move together, not which drives which — that needs a baseplate
+    sensor, or a step in load with the room held still.
+    """
+    hourly: dict[str, dict] = {}
+    for item in samples:
+        at, freq, temps = item.get("at"), item.get("ref_freq_offset"), item.get("temps")
+        if isinstance(at, str) and isinstance(freq, (int, float)) and isinstance(temps, dict):
+            hourly[at[:13]] = {"freq": freq, "temps": temps}
+    keys = sorted(hourly)[-window_hours:]
+    if len(keys) < 6:
+        return None
+
+    out = {}
+    names = {name for key in keys for name in hourly[key]["temps"]}
+    for name in sorted(names):
+        pairs = [(hourly[k]["temps"][name], hourly[k]["freq"]) for k in keys
+                 if isinstance(hourly[k]["temps"].get(name), (int, float))]
+        if len(pairs) < 6:
+            continue
+        n = len(pairs)
+        tmean = sum(t for t, _ in pairs) / n
+        fmean = sum(f for _, f in pairs) / n
+        stt = sum((t - tmean) ** 2 for t, _ in pairs)
+        sff = sum((f - fmean) ** 2 for _, f in pairs)
+        stf = sum((t - tmean) * (f - fmean) for t, f in pairs)
+        span = max(t for t, _ in pairs) - min(t for t, _ in pairs)
+        if stt <= 0 or sff <= 0 or span < 0.5:
+            # nothing to fit against: the sensor never moved over this window
+            out[name] = {"hours": n, "temp_span_c": span, "temp_mean_c": tmean, "slope": None, "r": None}
+            continue
+        out[name] = {"hours": n, "temp_span_c": span, "temp_mean_c": tmean,
+                     "temp_min_c": min(t for t, _ in pairs), "temp_max_c": max(t for t, _ in pairs),
+                     "slope": stf / stt, "r": stf / math.sqrt(stt * sff)}
+    if not out:
+        return None
+    return {"window_hours": window_hours, "sensors": out}
+
+
 def read_tcxo_adev(path: Path) -> dict | None:
     """Allan deviation of the GNSS receiver's own TCXO, from the last PPP run.
 
@@ -434,6 +522,9 @@ def main() -> int:
                         default=state_home / "clock-dashboard/tcxo-adev.json",
                         help="ADEV of the receiver's own oscillator, written by ppp-clk-adev "
                              "--json after a PPP run (optional; omitted from output if absent)")
+    parser.add_argument("--temp-sensor", action="append", metavar="NAME=PATH", default=[],
+                        help="extra temperature sensor beyond the kernel thermal zones, e.g. "
+                             "rb=/sys/bus/w1/devices/28-.../temperature (repeatable)")
     parser.add_argument("--retention-days", type=float, default=DEFAULT_RETENTION_DAYS)
     parser.add_argument("--timeout", type=float, default=45.0)
     args = parser.parse_args()
@@ -461,6 +552,8 @@ def main() -> int:
 
     sample = parse_gpsstat(output, returncode, collected_at)
     sample.update(operating_mode(args.survey_meta, now))
+    if temps := read_temperatures(args.temp_sensor):
+        sample["temps"] = temps
     args.history.parent.mkdir(parents=True, exist_ok=True)
     lock_path = args.history.with_suffix(args.history.suffix + ".lock")
     with lock_path.open("w") as lock:
@@ -494,6 +587,7 @@ def main() -> int:
             "samples": public_history(samples, now),
             **({"tcxo_adev": tcxo} if (tcxo := read_tcxo_adev(args.tcxo_adev)) else {}),
             **({"ref_adev": rb} if (rb := ref_freq_adev(samples)) else {}),
+            **({"temp_sensitivity": ts} if (ts := temp_freq_sensitivity(samples)) else {}),
         })
 
     print(f"clock-dashboard: wrote {len(samples)} samples to {args.output}")

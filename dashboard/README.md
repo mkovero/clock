@@ -11,8 +11,8 @@ The dashboard is deliberately two static files:
 Each published historical sample keeps the structured measurements needed for later
 diagnosis: RF jamming state, raw interference indicator, AGC and noise for every RF
 block; spoof state; C/N0 and DOP; constellation and satellite counts; PPS/receiver
-timing; reference-oscillator and MIKES measurements; operating mode; and non-OK check
-messages. The newest sample remains the complete `gpsstat` record, including its OK
+timing; reference-oscillator and MIKES measurements; enclosure temperatures; operating
+mode; and non-OK check messages. The newest sample remains the complete `gpsstat` record, including its OK
 checks and human-readable values. This makes `data.json` useful to other tools as well
 as to the page without duplicating routine OK text throughout the year-long history.
 
@@ -83,6 +83,28 @@ The old `/var/log/ntpstats` directory is not required. Chrony can write tracking
 statistics logs when configured to do so, but those files cover only the clock servo.
 The collector keeps its own compact JSON-lines history and includes the GNSS and
 hardware checks that make `gpsstat` useful.
+
+## Temperature
+
+Every kernel thermal zone is collected with each sample, and `temp_sensitivity` fits the
+reference frequency against each of them by least squares over the last seven days,
+bucketed hourly for the same reason the Allan deviation is: chrony writes the drift file
+hourly, so five-minute samples repeat it about twelve times.
+
+This became worth recording when the enclosure was closed on 2026-09-30. A rubidium moves
+a few parts in 10^11 across its rated range, so a few degrees is the same size as what
+this rig is trying to measure, and with the lid on the reference and the CM4 share one
+thermal volume — which means CPU load can reach the reference. The card reports the slope
+in parts in 10^12 per kelvin with its correlation.
+
+Read it as a correlation, not a mechanism. The CM4 die is a proxy for the case, not for
+the rubidium's baseplate, and a slope says the two move together rather than which drives
+which. A real baseplate sensor can be added without touching the code:
+
+    clock-dashboard ... --temp-sensor rb=/sys/bus/w1/devices/28-*/temperature
+
+Values above 200 are read as millidegrees, which covers kernel thermal zones, hwmon
+`tempN_input` and 1-Wire alike.
 
 ## Meaning of the headline numbers
 
