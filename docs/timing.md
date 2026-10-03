@@ -428,12 +428,32 @@ re-running this tool afterwards is its acceptance test — the slope should then
 The empirical 1.5× factor is a curiosity, possibly different rounding granularity in the two
 pulse generators; it is not understood.
 
-**Done 2026-10-02.** The coax moved to TP1 at the bench, and the three keys that make TP1
-behave as TP2 did were written on 2026-10-03: `DUTY_LOCK_TP1 50`, then `USE_LOCKED_TP1 1`,
-then `DUTY_TP1 0`. That order matters — `DUTY_LOCK_TP1` starts at 0, so switching first would
-point the receiver at an empty locked set and stop the pulse. `tools/qerr-vs-extts` has not
-been re-run yet; **its slope coming out at −1.0 is the acceptance test** and is the one piece
-of this story still outstanding.
+**Done 2026-10-02, and the acceptance test failed.** The coax moved to TP1 at the bench, and
+the three keys that make TP1 behave as TP2 did were written on 2026-10-03: `DUTY_LOCK_TP1 50`,
+then `USE_LOCKED_TP1 1`, then `DUTY_TP1 0`. That order matters — `DUTY_LOCK_TP1` starts at 0, so
+switching first would point the receiver at an empty locked set and stop the pulse.
+
+Re-running `tools/qerr-vs-extts` on the new wiring, 300 s with ts2phc running, 286 consecutive-
+second pairs:
+
+```
+slope d(extts)/d(qErr) = -1.469 +/- 0.133      correlation -0.549
+sd d(extts) 8.39 ns   sd d(qErr) 3.13 ns
+3.5 sigma from -1.000,  11.1 sigma from 0
+```
+
+**Statistically unchanged from the −1.556 ± 0.162 measured across two different outputs.** So
+the explanation offered above — different rounding granularity in the two pulse generators — is
+wrong: there is only one generator in this measurement and the factor survives. It is intrinsic
+to the relationship between `qErr` and the edge the PHY timestamps, and it is still not
+understood.
+
+A confound worth naming rather than burying: **ts2phc was running**, steering the PHC from the
+same events. The claim above that first-differencing makes the servo irrelevant is an
+assumption, and a servo reacting to qErr-contaminated measurements could itself bend the slope
+away from −1. The clean test needs ts2phc stopped, which costs the downstream PTP client its
+lock and has poor SNR, since the PHY's oscillator wanders about 95 ns over four minutes. Until
+someone does that run, "intrinsic" is the honest description and "explained" is not.
 
 A free-running variant (ts2phc stopped, the tool holding the EXTTS channel open itself via
 `--enable-extts`, since stopping ts2phc otherwise disables the channel and starves chrony too)
@@ -443,10 +463,12 @@ its lock.
 
 Consequences:
 
-- **The qErr correction (SatPulse-style) is now available in principle**: since 2026-10-02 the
-  wired pulse is TP1, which is the one TIM-TP reports. What is not yet shown is that the
-  correction works — see the acceptance test above. Until `qerr-vs-extts` returns a slope near
-  −1 on the new wiring, treat the correction as untested rather than available.
+- **The qErr correction is still not available, and rewiring did not deliver it.** TIM-TP now
+  describes the wired pulse, which was the point of the move and which the UTC(MIKE) work needed
+  — but the 1:1 relationship a quantisation correction depends on is not there. Subtracting
+  `qErr` directly makes the scatter *worse*, 7.61 → 8.59 ns, and the fitted −1.47 removes only
+  about 30 % of the differenced variance. Not worth building against until the servo-free
+  measurement either reproduces or dissolves the 1.5× factor.
 - **The wired pulse moved to the GPS grid on 2026-10-03** (`CFG-TP-TIMEGRID_TP1=1`,
   `refInfo` low nibble 3 → 0), precisely so that a comparison against a GPS-time reference such
   as the BIPM's `REFGPS` does not carry the Galileo-to-GPS offset. TP2, the unwired spare, stays
