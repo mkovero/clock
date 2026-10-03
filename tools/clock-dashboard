@@ -17,6 +17,9 @@ from pathlib import Path
 
 
 SCHEMA_VERSION = 1
+# Above this, a "PPS standard deviation" is chrony's placeholder for an unreachable refclock
+# rather than a measurement. Real values are tens of nanoseconds; see parse_gpsstat.
+PPS_SANITY_NS = 1_000_000.0
 DEFAULT_RETENTION_DAYS = 365.0
 FULL_RESOLUTION_DAYS = 7
 QUARTER_HOUR_DAYS = 30
@@ -109,8 +112,20 @@ def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
 
         match = re.match(r"^  chrony PPS2 offset / std dev\s*:\s*(\S+)\s+(\S+)$", line)
         if match:
-            sample["pps_offset_ns"] = quantity_ns(match.group(1))
-            sample["pps_stddev_ns"] = quantity_ns(match.group(2))
+            offset, stddev = quantity_ns(match.group(1)), quantity_ns(match.group(2))
+            # When PPS2 is unreachable chrony reports its 4-second placeholder dispersion
+            # rather than a measurement, and gpsstat passes it straight through: 4e9 ns with
+            # a 0.0 offset and an NTP server selected. Stored as-is it is not merely wrong,
+            # it destroys the chart scale for the whole retention window, because one sample
+            # eight orders of magnitude above the signal flattens everything else to a line.
+            # A working PPS refclock's scatter is tens of nanoseconds; a millisecond is
+            # already four orders out, so anything beyond that is a placeholder, not data.
+            if stddev is not None and abs(stddev) > PPS_SANITY_NS:
+                offset, stddev = None, None
+            if offset is not None:
+                sample["pps_offset_ns"] = offset
+            if stddev is not None:
+                sample["pps_stddev_ns"] = stddev
             continue
 
         match = re.match(
@@ -484,6 +499,41 @@ def temp_freq_sensitivity(samples: list[dict], window_hours: int = 24 * 7) -> di
     return {"window_hours": window_hours, "sensors": out}
 
 
+def read_milestones(path: Path, now: datetime) -> list[dict] | None:
+    """Dated things that have to happen, read from a small JSON file.
+
+    This rig runs on other people's calendars. A PPP session has to be stopped and submitted,
+    CSRS-PPP's final orbits and clocks appear about two weeks after the observations, and the
+    BIPM publishes each month's UTC(MIKE) file a couple of weeks after the month ends — so a
+    comparison started in October cannot produce a number until mid-November. Those dates are
+    easy to lose track of between sessions, and missing one costs a month rather than a day.
+
+    Format is a list of {"at": ISO-8601, "what": text, "done": optional bool}. Entries are
+    emitted with the days remaining computed here so the page does not have to agree with the
+    collector about what "now" is. Missing or unreadable is normal and leaves the field out.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    out = []
+    for item in data if isinstance(data, list) else []:
+        try:
+            when = datetime.fromisoformat(str(item["at"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        out.append({
+            "at": when.isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "what": str(item.get("what", "")),
+            "done": bool(item.get("done", False)),
+            "days": (when - now).total_seconds() / 86400.0,
+        })
+    out.sort(key=lambda x: x["at"])
+    return out or None
+
+
 def read_tcxo_adev(path: Path) -> dict | None:
     """Allan deviation of the GNSS receiver's own TCXO, from the last PPP run.
 
@@ -522,6 +572,10 @@ def main() -> int:
                         default=state_home / "clock-dashboard/tcxo-adev.json",
                         help="ADEV of the receiver's own oscillator, written by ppp-clk-adev "
                              "--json after a PPP run (optional; omitted from output if absent)")
+    parser.add_argument("--milestones", type=Path,
+                        default=state_home / "clock-dashboard/milestones.json",
+                        help="dated reminders shown on the page (optional JSON list of "
+                             "{at, what, done}; omitted from output if absent)")
     parser.add_argument("--temp-sensor", action="append", metavar="NAME=PATH", default=[],
                         help="extra temperature sensor beyond the kernel thermal zones, e.g. "
                              "rb=/sys/bus/w1/devices/28-.../temperature (repeatable)")
@@ -588,6 +642,7 @@ def main() -> int:
             **({"tcxo_adev": tcxo} if (tcxo := read_tcxo_adev(args.tcxo_adev)) else {}),
             **({"ref_adev": rb} if (rb := ref_freq_adev(samples)) else {}),
             **({"temp_sensitivity": ts} if (ts := temp_freq_sensitivity(samples)) else {}),
+            **({"milestones": ms} if (ms := read_milestones(args.milestones, now)) else {}),
         })
 
     print(f"clock-dashboard: wrote {len(samples)} samples to {args.output}")

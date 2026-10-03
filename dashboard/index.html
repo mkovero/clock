@@ -56,6 +56,7 @@
       <div class="card"><div class="label">chain checks</div><div id="checks" class="checks"></div></div>
       <div class="card" id="rbadev-card" hidden><div class="label">reference oscillator stability</div><div id="rbadev" class="constellations"></div><p class="stat-note">Overlapping Allan deviation of Chrony&rsquo;s frequency estimate for the AR-40A, from the longest unbroken stretch of the last 7 days (<span id="rbadev-hours">—</span> h). Hourly drift-file updates set the floor, so 1 h is the shortest meaningful τ. A mechanical trim, a power cycle or a kernel swap is a real frequency step and inflates every τ for days afterwards.</p></div>
       <div class="card" id="tcxo-card" hidden><div class="label">receiver oscillator stability</div><div id="tcxo-adev" class="constellations"></div><p class="stat-note">Allan deviation of the ZED-F9T&rsquo;s own TCXO against GNSS time, from the last PPP run (<span id="tcxo-when">—</span>, offset <span id="tcxo-ppm">—</span> ppm). Nothing disciplines this crystal, and it is not the 1&nbsp;PPS the receiver outputs; the rig&rsquo;s frequency comes from the AR-40A, some three orders better.</p></div>
+      <div class="card" id="milestones-card" hidden><div class="label">dates that matter</div><div id="milestones" class="checks"></div><p class="stat-note">Processing and publication dates this station waits on. CSRS-PPP final products appear about two weeks after the observations; the BIPM publishes each month&rsquo;s UTC(MIKE) file a couple of weeks after month end, so a comparison logged in one month yields a number in the middle of the next.</p></div>
       <div class="card" id="temp-card" hidden><div class="label">thermal</div><div id="temps" class="constellations"></div><p class="stat-note" id="temp-note">—</p></div>
     </section>
     <footer class="fineprint"><div><strong>What this proves.</strong> The PPS offset and standard deviation describe how tightly the local clock follows the receiver pulse. The max-error value is Chrony’s current bound from root dispersion plus half root delay.</div><div><strong>What it does not prove.</strong> A constant receiver, antenna, or cable delay is absorbed by the servo and is invisible here. Absolute UTC bias needs external calibration (the planned PPP clock solution). Updated <span id="updated">—</span>.</div></footer>
@@ -119,19 +120,43 @@ function medianRows(rows,keys,win){
   }
   return out;
 }
+// chrony reports a 4-second placeholder dispersion when PPS2 is unreachable, and samples
+// collected before 2026-10-03 stored it as though it were a measurement. One such point is
+// eight orders of magnitude above the signal, which flattens the whole chart to a line for
+// the entire retention window. The collector now drops them; this keeps the year of history
+// already on disk readable. A real PPS scatter is tens of nanoseconds.
+const PPS_SANITY_NS=1e6;
+const ppsOk=v=>finite(v)&&Math.abs(v)<=PPS_SANITY_NS;
 function render(){
   const samples=payload.samples||[],latest=samples.at(-1);if(!latest){$('#empty').style.display='block';return}$('#content').hidden=false;
   chartEnd=customEnd??Date.now();chartStart=customStart??chartEnd-RANGE_HOURS[rangeKey]*3600e3;chartStartLabel=customStart===null?`${rangeKey} ago`:axisTime(chartStart);chartEndLabel=customStart===null?'now':axisTime(chartEnd);syncRangeControls();
   const status=$('#status'),age=Date.now()-new Date(latest.at);if(age>15*60e3){status.className='status unavailable';status.lastElementChild.textContent='telemetry stale'}else{status.className=`status ${latest.status}`;status.lastElementChild.textContent=latest.status==='healthy'?'timing chain healthy':latest.status}
   const survey=latest.mode==='site-survey';$('#mode-value').textContent=survey?'SITE SURVEY':latest.mode==='fixed-timing'?'FIXED TIMING':'MODE UNKNOWN';$('#mode-detail').textContent=survey?(latest.survey_ready?`Target duration reached (${fmt(latest.survey_elapsed_hours,1)} h); ready to finish and restore fixed mode.`:`Receiver is roaming for position averaging · ${fmt(latest.survey_elapsed_hours,1)} of ${fmt(latest.survey_duration_hours,1)} h`):'Antenna position is fixed; PPS is optimized for timing.';$('#mode-progress').style.display=survey?'block':'none';$('#mode-progress span').style.width=`${latest.survey_progress_percent||0}%`;
-  $('#jitter').textContent=fmt(latest.pps_stddev_ns,1);$('#tacc').textContent=fmt(latest.receiver_tacc_ns,0);$('#used').textContent=fmt(latest.sats_used);$('#seen').textContent=fmt(latest.sats_seen);$('#pdop').textContent=fmt(latest.pdop,2);$('#rbfreq').textContent=finite(latest.ref_freq_offset)?fmt(latest.ref_freq_offset*1e9,3):'—';$('#rbskew').textContent=finite(latest.ref_freq_skew)?fmt(latest.ref_freq_skew*1e9,3):'—';$('#rbholdover').textContent=fmt(latest.holdover_us_per_day,1);$('#rbturns').textContent=fmt(latest.trim_turns,2);$('#reference').textContent=latest.ref||'—';$('#stratum').textContent=fmt(latest.stratum);
-  const metres=finite(latest.pps_stddev_ns)?latest.pps_stddev_ns*.299792458:null;$('#light-copy').textContent=finite(metres)?`Equivalent path length: ${fmt(metres,2)} metres. Measured local PPS scatter.`:'Measured by Chrony from the selected PPS source.';$('#light-bar').style.width=`${Math.min(100,Math.max(3,(latest.pps_stddev_ns||0)/1.2))}%`;
+  $('#jitter').textContent=ppsOk(latest.pps_stddev_ns)?fmt(latest.pps_stddev_ns,1):'—';$('#tacc').textContent=fmt(latest.receiver_tacc_ns,0);$('#used').textContent=fmt(latest.sats_used);$('#seen').textContent=fmt(latest.sats_seen);$('#pdop').textContent=fmt(latest.pdop,2);$('#rbfreq').textContent=finite(latest.ref_freq_offset)?fmt(latest.ref_freq_offset*1e9,3):'—';$('#rbskew').textContent=finite(latest.ref_freq_skew)?fmt(latest.ref_freq_skew*1e9,3):'—';$('#rbholdover').textContent=fmt(latest.holdover_us_per_day,1);$('#rbturns').textContent=fmt(latest.trim_turns,2);$('#reference').textContent=latest.ref||'—';$('#stratum').textContent=fmt(latest.stratum);
+  const metres=ppsOk(latest.pps_stddev_ns)?latest.pps_stddev_ns*.299792458:null;$('#light-copy').textContent=finite(metres)?`Equivalent path length: ${fmt(metres,2)} metres. Measured local PPS scatter.`:'Measured by Chrony from the selected PPS source.';$('#light-bar').style.width=`${Math.min(100,Math.max(3,(ppsOk(latest.pps_stddev_ns)?latest.pps_stddev_ns:0)/1.2))}%`;
   $('#cn0').textContent=(latest.best_cn0_dbhz||[]).map(v=>fmt(v,0)).join(' · ')||'—';$('#max-error').textContent=compactNs(latest.max_error_ns);$('#updated').textContent=new Date(payload.generated_at).toLocaleString();
   const rba=payload.ref_adev;if(rba&&rba.points&&rba.points.length){const box=$('#rbadev');box.replaceChildren();for(const p of rba.points){const el=document.createElement('span');el.textContent=`τ ${fmt(p.tau_s/3600,0)} h: ${p.adev.toExponential(1)}`;box.append(el)}$('#rbadev-hours').textContent=fmt(rba.hours,0);$('#rbadev-card').hidden=false}
   const tcxo=payload.tcxo_adev;if(tcxo&&tcxo.points&&tcxo.points.length){const box=$('#tcxo-adev');box.replaceChildren();for(const p of tcxo.points){const el=document.createElement('span');const tau=p.tau_s<3600?`${fmt(p.tau_s,0)} s`:`${fmt(p.tau_s/3600,1)} h`;el.textContent=`τ ${tau}: ${p.adev.toExponential(1)}`;box.append(el)}$('#tcxo-when').textContent=tcxo.measured_to?new Date(tcxo.measured_to).toISOString().slice(0,10):'—';$('#tcxo-ppm').textContent=finite(tcxo.freq_offset_ppm)?fmt(tcxo.freq_offset_ppm,3):'—';$('#tcxo-card').hidden=false}
   const consts=$('#constellations');consts.replaceChildren();for(const [name,count] of Object.entries(latest.constellations||{})){const el=document.createElement('span');el.className='sat';el.append(name+' ');const b=document.createElement('b');b.textContent=count;el.append(b);consts.append(el)}
   const checks=$('#checks');checks.replaceChildren();for(const item of (latest.checks||[]).filter(x=>x.level!=='ok').slice(0,6)){const row=document.createElement('div');row.className=`check ${item.level}`;const level=document.createElement('span'),copy=document.createElement('span');level.textContent=item.level.toUpperCase();copy.textContent=item.text;row.append(level,copy);checks.append(row)}if(!checks.children.length){checks.innerHTML='<div class="check"><span>OK</span><span>Every monitored link reports healthy.</span></div>'}
   const blocks=latest.rf_blocks||[],rank={ok:0,unknown:1,warning:2,critical:3},worst=blocks.reduce((a,b)=>(rank[b.state]||0)>(rank[a]||0)?b.state:a,'ok'),spoofDanger=(latest.spoof_code||0)>=2,integrity=$('#integrity');integrity.textContent=spoofDanger?'SPOOFING INDICATED':worst==='critical'?'CRITICAL INTERFERENCE':worst==='warning'?'RF WARNING':'NO ALERTS';integrity.className=`integrity ${spoofDanger?'critical':worst}`;$('#spoof').textContent=`Spoof detector: ${(latest.spoof_state||'unavailable').replaceAll('-',' ')}`;const rfList=$('#rf-list');rfList.replaceChildren();for(const b of blocks){const row=document.createElement('div');row.className='rf-row';const name=document.createElement('span'),reading=document.createElement('b');name.textContent=`RF block ${b.id} · ${b.state}`;reading.textContent=`${b.jam_indicator}/255`;row.append(name,reading);rfList.append(row)}
+  const ms=payload.milestones;
+  if(ms&&ms.length){
+    const box=$('#milestones');box.replaceChildren();
+    // overdue first, then soonest; done entries last and muted
+    const rank=m=>m.done?2:(m.days<0?0:1);
+    for(const m of [...ms].sort((a,b)=>rank(a)-rank(b)||a.days-b.days).slice(0,6)){
+      const row=document.createElement('div');
+      const d=m.days;
+      const level=m.done?'ok':d<0?'critical':d<2?'warning':'ok';
+      row.className=`check ${level}`;
+      const when=document.createElement('span'),what=document.createElement('span');
+      when.textContent=m.done?'DONE':d<0?`${fmt(-d,0)}d OVERDUE`:d<1?`${fmt(d*24,0)}h`:`${fmt(d,0)}d`;
+      what.textContent=`${new Date(m.at).toISOString().slice(0,10)} · ${m.what}`;
+      row.append(when,what);box.append(row);
+    }
+    $('#milestones-card').hidden=false;
+  }
   const tempNames=Object.keys(latest.temps||{}).slice(0,3),tempColors=['--amber','--cyan','--mint'];
   if(tempNames.length){const box=$('#temps');box.replaceChildren();for(const [name,value] of Object.entries(latest.temps)){const el=document.createElement('span');el.className='sat';el.append(name+' ');const b=document.createElement('b');b.textContent=`${fmt(value,1)} °C`;el.append(b);box.append(el)}
     const ts=payload.temp_sensitivity,parts=[];
@@ -147,6 +172,8 @@ function render(){
     $('#temp-note').textContent=parts.join(' ');$('#temp-card').hidden=false}
   const mikesNames=(latest.mikes_sources||[]).map(s=>s.name),mikesColors=['--cyan','--mint','--amber'];
   const base=samples.filter(s=>{const at=new Date(s.at);return at>=chartStart&&at<=chartEnd}).map(s=>{const mikes=Object.fromEntries((s.mikes_sources||[]).map(v=>[v.name,v]));return {...s,
+    pps_offset_ns:ppsOk(s.pps_offset_ns)?s.pps_offset_ns:undefined,
+    pps_stddev_ns:ppsOk(s.pps_stddev_ns)?s.pps_stddev_ns:undefined,
     jam0:(s.rf_blocks||[]).find(b=>b.id===0)?.jam_indicator,
     jam1:(s.rf_blocks||[]).find(b=>b.id===1)?.jam_indicator,
     rbppb:finite(s.ref_freq_offset)?s.ref_freq_offset*1e9:undefined,

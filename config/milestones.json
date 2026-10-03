@@ -1,0 +1,10 @@
+[
+  {"at": "2026-10-04T00:42:00Z",
+   "what": "RAWX + TIM-TP session ends — f9t-rawlog stop, then f9t-ppp ~/f9t-rawlog/rawx.ubx"},
+  {"at": "2026-10-05T12:00:00Z",
+   "what": "CSRS-PPP rapid solution should be back — exercise the TIM-TP tie end to end"},
+  {"at": "2026-10-18T00:00:00Z",
+   "what": "CSRS-PPP final orbits/clocks available for 2026-10-03 — resubmit for the better solution"},
+  {"at": "2026-11-15T00:00:00Z",
+   "what": "BIPM should have published mike2610.gpi — run the UTC(MIKE) comparison"}
+]

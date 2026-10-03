@@ -84,6 +84,19 @@ statistics logs when configured to do so, but those files cover only the clock s
 The collector keeps its own compact JSON-lines history and includes the GNSS and
 hardware checks that make `gpsstat` useful.
 
+## Dates that matter
+
+`--milestones` points at a small JSON list of `{at, what, done}` which the collector publishes
+with the days remaining computed, and the page shows as a card: overdue first, then soonest,
+colour-coded, with `DONE` entries last. `config/milestones.json` in this repo is the working
+copy; the live one is `~/.local/state/clock-dashboard/milestones.json` on aika.
+
+It exists because this station waits on other people's calendars. CSRS-PPP final orbits and
+clocks appear about two weeks after the observations, and the BIPM publishes each month's
+UTC(MIKE) file a couple of weeks after the month ends — so a comparison logged in October
+cannot yield a number before the middle of November. Those are easy to lose track of between
+sessions, and missing one costs a month rather than a day.
+
 ## Temperature
 
 Every kernel thermal zone is collected with each sample, and `temp_sensitivity` fits the
