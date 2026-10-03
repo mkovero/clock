@@ -104,6 +104,43 @@ before 6.x prints `PTP Hardware Clock: N`, while 7.x prints `Hardware timestamp 
 index: N`. A wait script matching only one of them silently never succeeds, which turns a
 cosmetic boot warning into a dead timing chain.
 
+## The RF interference baselines moved after a rebuild
+
+Noticed 2026-10-03, the day after the rig moved into a new rack enclosure. Daily medians from
+the dashboard history, before (17–30 Sep) against after:
+
+| block | AGC | noise/ms | jamInd | C/N0 best |
+|---|---|---|---|---|
+| 0 (L1) | 6318 → 5967 | 70 → 66 | **47 → 32** | 47–48 → 46–48 |
+| 1 (L2) | 5616 → 5616 | 48 → 45 | **6 → 25** | — |
+
+Both bands moved, in opposite directions, and block 1's AGC did not move at all. Satellites
+*seen* is unchanged at 38 and C/N0 is unchanged, so the wanted signal is fine and this is an
+interference change rather than a signal-path fault. The cost is small but real: satellites
+*used* went 19 → 17 and the receiver's own `tAcc` went 1 → 2 ns.
+
+Worth knowing before reading alarm into it: **block 0 was already in `warning` before the
+move** (since 29 Sep, at jamInd ≈ 49) and block 1 flickered in and out. What is new is that
+block 1 now sits there persistently. The state comes from the receiver's own jamming flag in
+`UBX-MON-RF`, not from a threshold on `jamInd`, which is why block 0 can be flagged at 32 now
+having been unflagged at 47 historically — it is the receiver's judgement, not a level.
+
+**Leading hypothesis: harmonics of the 10 MHz distribution.** The 123rd harmonic of 10 MHz is
+1230 MHz, 2.4 MHz from L2's 1227.6 centre and well inside the band; for L1 at 1575.42 the
+nearest harmonics are 1570 and 1580, about 4.6 MHz out. The rubidium, the distribution
+amplifier and all their coax now sit inside one metal box with the antenna feed, on new routing
+and new bonding, which is a textbook way to change which harmonics couple into the front end.
+Other candidates are the Si5351's 54 MHz and its 864 MHz VCO, the CM4's 125 MHz Ethernet
+clocks, and the switching supplies now enclosed with everything else.
+
+**There is no spectrum view to settle it with.** `UBX-MON-SPAN` would localise the carrier
+immediately, but this firmware (TIM 2.01) does not implement it — the
+`CFG-MSGOUT-UBX_MON_SPAN_UART1` key does not exist on the receiver, while `MON-RF`'s does. So
+localisation needs either a spectrum analyser or substitution at the bench: change one thing at
+a time — antenna coax routing away from the 10 MHz runs, termination of the distribution
+amplifier's unused outputs, the single-point bond of the antenna shield — and watch `jamInd`
+per block, which is itself the receiver's spectrum monitor.
+
 ## Dead RTC → gpsd → chrony
 
 *2026-09-10.* The rig ran at stratum 3 from the network with both GNSS refclocks at
