@@ -33,9 +33,18 @@ column is found by name; pass --ppp-clock-col if the header ever changes.
 """
 
 import argparse
+import csv
+import datetime
 import re
 import sys
 import urllib.request
+
+GPS_EPOCH = datetime.datetime(1980, 1, 6)
+WEEK = 604800
+# GPS time runs ahead of UTC by an integer number of seconds (18 since 2017). TIM-TP and RINEX
+# CLOCK epochs are GPS time; MIKES's .gpi files are on the UTC grid, so the two are aligned here
+# and nowhere else. Update this if a leap second is ever inserted again.
+LEAP_GPS_UTC = 18
 
 BIPM = "https://webtai.bipm.org/ftp/pub/tai/data/{year}/time_transfer/ppp/{name}"
 
@@ -48,6 +57,105 @@ def fetch_mike(yymm, out):
     with urllib.request.urlopen(url, timeout=120) as r, open(out, "wb") as f:
         f.write(r.read())
     return out
+
+
+def read_timtp(path):
+    """(gps_datetime, pps_minus_tow_ns) per pulse, from ubx-timtp --csv output.
+
+    `pps_minus_tow_ns` is -qErr: the edge lands earlier than the instant TIM-TP names, which is
+    measured rather than assumed — see tools/ubx-timtp.
+    """
+    rows = []
+    with open(path) as handle:
+        for rec in csv.DictReader(handle):
+            if rec.get("qerr_valid") == "0":
+                continue
+            when = GPS_EPOCH + datetime.timedelta(weeks=int(rec["week"]), seconds=float(rec["tow_s"]))
+            rows.append((when, float(rec["pps_minus_tow_ns"])))
+    rows.sort()
+    return rows
+
+
+def read_clk(path, station=None):
+    """(gps_datetime, receiver_clock_offset_seconds) from the AR records of a RINEX CLOCK file.
+
+    This is the receiver clock against GPS/IGS time, the same series tools/ppp-clk-adev reads.
+    Epochs in a RINEX CLOCK file are GPS time, which is what TIM-TP reports too, so the two
+    need no leap-second handling between them.
+    """
+    rows = []
+    for line in open(path, errors="replace"):
+        if not line.startswith("AR "):
+            continue
+        f = line.split()
+        if station and f[1].upper() != station.upper():
+            continue
+        when = datetime.datetime(int(f[2]), int(f[3]), int(f[4]), int(f[5]), int(f[6])) \
+            + datetime.timedelta(seconds=float(f[7]))
+        rows.append((when, float(f[9])))
+    rows.sort()
+    return rows
+
+
+def interpolate(series, when):
+    """Linear interpolation of a sorted (datetime, value) series at `when`; None outside it."""
+    if not series or when < series[0][0] or when > series[-1][0]:
+        return None
+    lo, hi = 0, len(series) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if series[mid][0] <= when:
+            lo = mid
+        else:
+            hi = mid
+    (t0, v0), (t1, v1) = series[lo], series[hi]
+    span = (t1 - t0).total_seconds()
+    if span <= 0:
+        return v0
+    return v0 + (v1 - v0) * ((when - t0).total_seconds() / span)
+
+
+def drift_ppm(points):
+    """Least-squares slope of (datetime, ns) in ppm, for the sign self-check below."""
+    if len(points) < 3:
+        return 0.0
+    t0 = points[0][0]
+    xs = [(t - t0).total_seconds() for t, _ in points]
+    ys = [v for _, v in points]
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return 0.0
+    slope_ns_per_s = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
+    return slope_ns_per_s / 1000.0          # ns/s -> ppm
+
+
+def pps_minus_gps(timtp, clk):
+    """Tie the pulse to GPS time: PPS - GPS = (PPS - tow) - (receiver clock - GPS time).
+
+    **The sign convention is checked against the data, not asserted.** The receiver clock is a
+    free-running TCXO drifting by ~0.46 ppm, which is 40 ms a day, while a steered pulse sits
+    within nanoseconds of GPS time. So of the two possible signs, exactly one cancels that drift
+    and the other doubles it. Both are computed, and the one leaving the smaller residual drift
+    wins; if neither is small the tool says so rather than quoting a number, because that means
+    an assumption below is wrong — most likely that RINEX CLOCK epochs and TIM-TP both carry GPS
+    time, or that the AR records are the receiver clock rather than something else.
+    """
+    out = {}
+    for sign in (-1.0, +1.0):
+        points = []
+        for when, pps_tow_ns in timtp:
+            dt = interpolate(clk, when)
+            if dt is None:
+                continue
+            points.append((when, pps_tow_ns + sign * dt * 1e9))
+        out[sign] = points
+    scored = {sign: abs(drift_ppm(pts)) for sign, pts in out.items() if len(pts) > 2}
+    if not scored:
+        return None, None, {}
+    best = min(scored, key=scored.get)
+    return best, out[best], scored
 
 
 def read_mike(path):
@@ -113,6 +221,17 @@ def epoch_of(f, cols):
     return d.toordinal() - 678576, sod
 
 
+def mjd_of(when):
+    """MJD of a GPS-time datetime, converted to UTC first: MIKES files are on the UTC grid."""
+    utc = when - datetime.timedelta(seconds=LEAP_GPS_UTC)
+    return utc.toordinal() - 678576
+
+
+def sod_of(when):
+    utc = when - datetime.timedelta(seconds=LEAP_GPS_UTC)
+    return utc.hour * 3600 + utc.minute * 60 + utc.second
+
+
 def pair(ours, theirs, tol=15):
     """Match our epochs to theirs within tol seconds."""
     theirs_by = {(m, s): v for m, s, v in theirs}
@@ -133,8 +252,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mike", help="BIPM PPP file (mikeYYMM.gpi)")
     p.add_argument("--fetch", metavar="YYMM", help="download that month's MIKES file first")
-    p.add_argument("--ppp", help="CSRS-PPP .pos file from the full result archive")
+    p.add_argument("--ppp", help="CSRS-PPP .pos file from the full result archive (ignored with --timtp)")
     p.add_argument("--ppp-clock-col", help="regex for the clock column name in the .pos header")
+    p.add_argument("--timtp", help="TIM-TP CSV from ubx-timtp --csv; ties the pulse to the receiver clock")
+    p.add_argument("--clk", help="RINEX CLOCK file from the PPP archive (AR records), used with --timtp")
+    p.add_argument("--station", help="station id to select in the .clk file")
     p.add_argument("--list", action="store_true", help="just report what the MIKES file covers")
     a = p.parse_args()
 
@@ -142,22 +264,67 @@ def main():
     if a.fetch:
         path = path or f"mike{a.fetch}.gpi"
         fetch_mike(a.fetch, path)
-    if not path:
-        sys.exit("need --mike or --fetch")
+    if not path and not a.timtp:
+        sys.exit("need --mike or --fetch, or --timtp to compute our own side alone")
 
-    header, theirs = read_mike(path)
-    mjds = sorted({m for m, _, _ in theirs})
-    print(f"{path}: {len(theirs)} rows, MJD {mjds[0]}..{mjds[-1]}, "
-          f"REF={header.get('REF', '?')}, {header.get('COMMENTS', '')[:60]}")
-    print(f"  their delays: INT {header.get('INT DLY', '?')} | CAB {header.get('CAB DLY', '?')} | "
-          f"REF {header.get('REF DLY', '?')}")
-    if a.list or not a.ppp:
+    header, theirs, mjds = {}, [], []
+    if path:
+        header, theirs = read_mike(path)
+        mjds = sorted({m for m, _, _ in theirs})
+        if not theirs:
+            sys.exit(f"{path}: no PRN 99 rows parsed -- is this a BIPM PPP .gpi file?")
+        print(f"{path}: {len(theirs)} rows, MJD {mjds[0]}..{mjds[-1]}, "
+              f"REF={header.get('REF', '?')}, {header.get('COMMENTS', '')[:60]}")
+        print(f"  their delays: INT {header.get('INT DLY', '?')} | CAB {header.get('CAB DLY', '?')} | "
+              f"REF {header.get('REF DLY', '?')}")
+        if a.list:
+            return
+    if not a.ppp and not a.timtp:
         return
 
-    ours = read_ppp(a.ppp, a.ppp_clock_col)
-    if not ours:
-        sys.exit("no epochs parsed from the .pos file")
-    print(f"{a.ppp}: {len(ours)} epochs, MJD {min(m for m, _, _ in ours)}..{max(m for m, _, _ in ours)}")
+    if a.timtp:
+        if not a.clk:
+            sys.exit("--timtp needs --clk, the RINEX CLOCK file from the same PPP run")
+        timtp = read_timtp(a.timtp)
+        clk = read_clk(a.clk, a.station)
+        if not timtp or not clk:
+            sys.exit(f"nothing to tie: {len(timtp)} TIM-TP rows, {len(clk)} AR records")
+        print(f"{a.timtp}: {len(timtp)} pulses, {timtp[0][0]} .. {timtp[-1][0]} (GPS time)")
+        print(f"{a.clk}: {len(clk)} AR records, receiver clock "
+              f"{clk[0][1]*1e6:+.1f} .. {clk[-1][1]*1e6:+.1f} us")
+        sign, tied, scored = pps_minus_gps(timtp, clk)
+        if not tied:
+            sys.exit("no overlap between the pulses and the clock solution")
+        print(f"\nsign check (the free-running TCXO drift must cancel, not double):")
+        for sg, drift in sorted(scored.items()):
+            mark = "  <- used" if sg == sign else ""
+            print(f"  PPS-tow {'-' if sg < 0 else '+'} clock : residual drift {drift:+.4f} ppm{mark}")
+        if scored[sign] > 0.05:
+            sys.exit(f"\nNeither sign cancels the drift ({scored[sign]:.4f} ppm residual). One of the\n"
+                     f"assumptions is wrong -- most likely that the .clk epochs and TIM-TP are both\n"
+                     f"GPS time, or that the AR records are this receiver's clock. Not quoting a number.")
+        vals = [v for _, v in tied]
+        mean = sum(vals) / len(vals)
+        sd = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+        print(f"\nPPS - GPS time: {len(tied)} pulses, mean {mean:+.1f} ns, sd {sd:.1f} ns, "
+              f"residual drift {scored[sign]:+.4f} ppm")
+        print("That is this station's pulse against GPS time, still uncorrected for antenna,")
+        print("LNA, cable and receiver delays. Differencing it against MIKES below removes the")
+        print("satellite errors common to both, not our own hardware delays.")
+        ours = [(mjd_of(t), sod_of(t), v) for t, v in tied]
+    else:
+        ours = read_ppp(a.ppp, a.ppp_clock_col)
+        if not ours:
+            sys.exit("no epochs parsed from the .pos file")
+        print(f"{a.ppp}: {len(ours)} epochs, MJD {min(m for m, _, _ in ours)}..{max(m for m, _, _ in ours)}")
+        print("\nWARNING: without --timtp this differences the receiver's free-running TCXO")
+        print("against UTC(MIKE), which measures our crystal and not our timing output.")
+
+    if not theirs:
+        print("\nNo MIKES file given, so our side is computed and nothing is compared. The")
+        print("BIPM publishes mikeYYMM.gpi a couple of weeks after each month ends; pass it")
+        print("with --mike, or --fetch YYMM, once the month in question is available.")
+        return
 
     both = pair(ours, theirs)
     if not both:

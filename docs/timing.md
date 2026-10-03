@@ -490,9 +490,24 @@ Consequences:
   `refInfo` low nibble 3 → 0), precisely so that a comparison against a GPS-time reference such
   as the BIPM's `REFGPS` does not carry the Galileo-to-GPS offset. TP2, the unwired spare, stays
   on grid 4. The switch was itself a measurement — see below.
-- `tools/ppp-vs-utcmike` is **unblocked in principle**: the tie between the receiver clock and
-  the pulse now exists, because TIM-TP describes the wired output, and the GGTO term has been
-  removed by moving to the GPS grid. It still needs a RAWX session logging `UBX-TIM-TP`
+- `tools/ppp-vs-utcmike` **implements the tie as of 2026-10-03**, via `--timtp` (a CSV from
+  `tools/ubx-timtp`) and `--clk` (the RINEX CLOCK file from the PPP archive). It no longer
+  needs a MIKES file to run: without one it computes and prints our own PPS − GPS time series
+  and stops, which is what can be done before the BIPM publishes the month.
+
+  **It checks its own sign convention rather than asserting one.** The receiver clock is a
+  free-running TCXO drifting ~0.46 ppm — 40 ms a day — while a steered pulse sits within
+  nanoseconds of GPS time, so of the two possible signs exactly one cancels that drift and the
+  other doubles it. Both are computed and the smaller residual wins; if neither is small the
+  tool refuses to quote a number and exits 1, because that means an assumption is wrong (most
+  likely that RINEX CLOCK epochs and TIM-TP both carry GPS time, or that the AR records are
+  this receiver's clock). Verified on synthetic data with a planted 25.0 ns offset and 0.456 ppm
+  drift: recovered +25.0 ns at 2.5 ns sd with 0.0000 ppm residual, the wrong sign reported
+  0.9120 ppm — exactly twice the planted drift — and a deliberately mismatched clock file was
+  refused.
+
+  The tie between the receiver clock and the pulse now exists because TIM-TP describes the
+  wired output, and the GGTO term has been removed by moving to the GPS grid. It still needs a RAWX session logging `UBX-TIM-TP`
   alongside, and a MIKES month that overlaps it — the BIPM publishes `mikeYYMM.gpi` a couple of
   weeks after month end, so an October session yields a number in mid-November. That publication
   date is the binding constraint; CSRS-PPP returns rapid products in about a day and finals in
