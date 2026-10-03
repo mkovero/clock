@@ -161,7 +161,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 |---|---|
 | Mode | `CFG-TMODE-MODE=2`, fixed LLA |
 | Position | fixed, from PPP on rapid products, written 2026-09-19 and confirmed against final products 2026-09-30 (2.8 mm apart, still `IAR 0.00%`). 0.38 m 3D (1σ, east widened) ≈ 1.28 ns, ITRF20 ellipsoidal. Coordinates are not in this public repo — see [config/README.md](../config/README.md) |
-| Time pulse | **TP1** 1 Hz, 50% duty, `USE_LOCKED_TP1=1`, locked-only since 2026-10-03. The coax moved from TP2 to TP1 on 2026-10-02; TP2 keeps its old settings but is no longer wired |
+| Time pulse | **TP1** 1 Hz, 50% duty, `USE_LOCKED_TP1=1`, locked-only since 2026-10-03, on the **GPS** time grid (`TIMEGRID_TP1=1`) since the same day. The coax moved from TP2 to TP1 on 2026-10-02; TP2 keeps its old settings, including the Galileo grid, but is no longer wired |
 | Cable delay | `CFG-TP-ANT_CABLEDELAY=40` ns (8 m ÷ (0.66 c) = 40.4 ns). Excludes LNA and receiver delay |
 | Signals | GPS L1C/A + L2C, Galileo E1 + E5b, BeiDou B1I + B2I |
 | UART1 | 460800. RTCM3 base-station output off. RAWX/SFRBX on only while logging for PPP |
@@ -447,13 +447,37 @@ Consequences:
   wired pulse is TP1, which is the one TIM-TP reports. What is not yet shown is that the
   correction works — see the acceptance test above. Until `qerr-vs-extts` returns a slope near
   −1 on the new wiring, treat the correction as untested rather than available.
-- **Both pulses sit on time grid 4 = Galileo** (`CFG-TP-TIMEGRID_TP1/TP2`), confirmed by
-  `refInfo (GNSS:Galileo)`. Any comparison against a GPS-time reference such as the BIPM's
-  `REFGPS` therefore carries the Galileo-to-GPS time offset (GGTO, a few ns).
+- **The wired pulse moved to the GPS grid on 2026-10-03** (`CFG-TP-TIMEGRID_TP1=1`,
+  `refInfo` low nibble 3 → 0), precisely so that a comparison against a GPS-time reference such
+  as the BIPM's `REFGPS` does not carry the Galileo-to-GPS offset. TP2, the unwired spare, stays
+  on grid 4. The switch was itself a measurement — see below.
 - `tools/ppp-vs-utcmike` is **unblocked in principle**: the tie between the receiver clock and
-  the pulse now exists, because TIM-TP describes the wired output. It still needs a RAWX session
-  logging `UBX-TIM-TP` alongside, and a MIKES month that overlaps it. The GGTO caveat above
-  still applies, since TP1 also sits on the Galileo grid.
+  the pulse now exists, because TIM-TP describes the wired output, and the GGTO term has been
+  removed by moving to the GPS grid. It still needs a RAWX session logging `UBX-TIM-TP`
+  alongside, and a MIKES month that overlaps it — the BIPM publishes `mikeYYMM.gpi` a couple of
+  weeks after month end, so an October session yields a number in mid-November. That publication
+  date is the binding constraint; CSRS-PPP returns rapid products in about a day and finals in
+  about two weeks.
+
+### Measuring the GGTO by switching the grid
+
+Changing `CFG-TP-TIMEGRID_TP1` from 4 to 1 at 2026-10-03T00:18:36Z steps the pulse by exactly
+the Galileo-to-GPS offset, so the change is also the measurement. From chrony's
+`refclocks.log`, PPS2 raw offsets either side:
+
+| grid | samples | mean | sd |
+|---|---|---|---|
+| 4 = Galileo | 416 | −9.47 ns | 20.59 ns |
+| 1 = GPS | 106 | +1.34 ns | 13.98 ns |
+
+**Step = +10.81 ± 1.69 ns (6.4σ)** — the GGTO as this receiver realises it, consistent with the
+few-nanosecond figure the term is usually quoted at. `UBX-TIM-TP`'s `refInfo` went from `x03` to
+`x00` (low nibble 3 = Galileo → 0 = GPS), confirming the pulse followed rather than just the
+setting. The system clock never moved more than a nanosecond; chrony absorbed the step.
+
+Worth noting what this is not: it is one receiver's view over a few minutes, not a GGTO
+determination. It is quoted here because it is the size of the systematic that would otherwise
+have sat silently inside any comparison against a GPS-time reference.
 
 **CGGTTS was tried first and parked** (2026-09-29). `rnx2cggtts` 1.0.2 builds (pin `time` to
 0.3.41 first) and writes a valid CGGTTS header from our RINEX, but produces **zero tracks**:
