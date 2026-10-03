@@ -442,18 +442,32 @@ sd d(extts) 8.39 ns   sd d(qErr) 3.13 ns
 3.5 sigma from -1.000,  11.1 sigma from 0
 ```
 
-**Statistically unchanged from the −1.556 ± 0.162 measured across two different outputs.** So
-the explanation offered above — different rounding granularity in the two pulse generators — is
-wrong: there is only one generator in this measurement and the factor survives. It is intrinsic
-to the relationship between `qErr` and the edge the PHY timestamps, and it is still not
-understood.
+Statistically unchanged from the −1.556 ± 0.162 measured across two different outputs — which
+looked at first like the factor being intrinsic. It is not. **It was the servo.**
 
-A confound worth naming rather than burying: **ts2phc was running**, steering the PHC from the
-same events. The claim above that first-differencing makes the servo irrelevant is an
-assumption, and a servo reacting to qErr-contaminated measurements could itself bend the slope
-away from −1. The clean test needs ts2phc stopped, which costs the downstream PTP client its
-lock and has poor SNR, since the PHY's oscillator wanders about 95 ns over four minutes. Until
-someone does that run, "intrinsic" is the honest description and "explained" is not.
+Repeating the run with **ts2phc stopped**, same length, same 286 consecutive-second pairs:
+
+| ts2phc | slope d(extts)/d(qErr) | from −1.000 | from 0 | r | sd d(extts) | sd d(qErr) |
+|---|---|---|---|---|---|---|
+| running | −1.469 ± 0.133 | 3.5σ | 11.1σ | −0.549 | 8.39 ns | 3.13 ns |
+| **stopped** | **−0.955 ± 0.209** | **0.2σ** | 4.6σ | −0.261 | 12.47 ns | 3.41 ns |
+
+Servo-free the slope is exactly what a shared quantisation predicts, and still 4.6σ from zero,
+so the relationship is real. **`qErr` does describe the wired pulse's quantisation 1:1.** The
+two slopes differ by 2.1σ, which is suggestive rather than decisive on its own, but the physical
+story is plain: a servo that steers the clock from the same timestamps it is being measured
+against will bias the regression, and the claim elsewhere in this file that first-differencing
+makes the servo irrelevant is simply wrong.
+
+That also undermines the −1.556 result above, which was taken with ts2phc running. The
+conclusion drawn from it — that TP1 and TP2 are "related, not identical" — is not supported;
+most or all of that departure from −1 was probably the same artefact rather than anything about
+the two outputs.
+
+The servo-free run costs what the earlier attempt said it costs: the PHC free-runs and wanders
+about 400 ns over five minutes, which swamps the undifferenced correlation, and the downstream
+PTP client follows a drifting master for the duration. Everything recovered within a minute of
+restarting ts2phc (PPS2 +3 ns, PHC −1 ns, the PTP client back to +462 ns).
 
 A free-running variant (ts2phc stopped, the tool holding the EXTTS channel open itself via
 `--enable-extts`, since stopping ts2phc otherwise disables the channel and starves chrony too)
@@ -463,12 +477,15 @@ its lock.
 
 Consequences:
 
-- **The qErr correction is still not available, and rewiring did not deliver it.** TIM-TP now
-  describes the wired pulse, which was the point of the move and which the UTC(MIKE) work needed
-  — but the 1:1 relationship a quantisation correction depends on is not there. Subtracting
-  `qErr` directly makes the scatter *worse*, 7.61 → 8.59 ns, and the fitted −1.47 removes only
-  about 30 % of the differenced variance. Not worth building against until the servo-free
-  measurement either reproduces or dissolves the 1.5× factor.
+- **The qErr correction is sound in principle, and worth single-digit percent in practice.**
+  TIM-TP describes the wired pulse and the servo-free slope is 1:1, so the information is
+  genuinely there. But the quantisation is a minority of the noise: differenced, `qErr` carries
+  3.1 ns against the PHY timestamps' 8.4 ns, so even a perfect correction takes the scatter from
+  8.39 to about 7.8 ns — roughly 7 %. Worth having, not transformative, and it needs code that
+  does not exist: `ts2phc` has no `qErr` input, so realising it means patching linuxptp or
+  moving to something like SatPulse. Note also that subtracting `qErr` from the *servo-running*
+  series makes things worse (7.61 → 8.59 ns), because the servo has already absorbed part of it
+  — a correction has to go inside the loop, not after it.
 - **The wired pulse moved to the GPS grid on 2026-10-03** (`CFG-TP-TIMEGRID_TP1=1`,
   `refInfo` low nibble 3 → 0), precisely so that a comparison against a GPS-time reference such
   as the BIPM's `REFGPS` does not carry the Galileo-to-GPS offset. TP2, the unwired spare, stays
