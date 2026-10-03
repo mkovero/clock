@@ -18,7 +18,7 @@ configured, and what the accuracy figures do and don't mean.
 ## The chain
 
 ```
-F9T TIME2 ──► PHY extts (/dev/ptp0) ─┬► chrony refclock PPS2 ─┐
+F9T TIME1 ──► PHY extts (/dev/ptp0) ─┬► chrony refclock PPS2 ─┐
                                      │                        │
 F9T UART1 ──► gpsd ──► SHM(0) ──► chrony refclock NMEA ───────┤ (numbers the second)
                                      │                        ▼
@@ -161,7 +161,7 @@ page. See [dashboard/README.md](../dashboard/README.md).
 |---|---|
 | Mode | `CFG-TMODE-MODE=2`, fixed LLA |
 | Position | fixed, from PPP on rapid products, written 2026-09-19 and confirmed against final products 2026-09-30 (2.8 mm apart, still `IAR 0.00%`). 0.38 m 3D (1σ, east widened) ≈ 1.28 ns, ITRF20 ellipsoidal. Coordinates are not in this public repo — see [config/README.md](../config/README.md) |
-| Time pulse | TP2 1 Hz, 50% duty, `USE_LOCKED_TP2=1`, locked-only since 2026-09-14 |
+| Time pulse | **TP1** 1 Hz, 50% duty, `USE_LOCKED_TP1=1`, locked-only since 2026-10-03. The coax moved from TP2 to TP1 on 2026-10-02; TP2 keeps its old settings but is no longer wired |
 | Cable delay | `CFG-TP-ANT_CABLEDELAY=40` ns (8 m ÷ (0.66 c) = 40.4 ns). Excludes LNA and receiver delay |
 | Signals | GPS L1C/A + L2C, Galileo E1 + E5b, BeiDou B1I + B2I |
 | UART1 | 460800. RTCM3 base-station output off. RAWX/SFRBX on only while logging for PPP |
@@ -206,8 +206,8 @@ reports `Offset ~0ns` no matter what. What remains visible:
   clock.
 
 None of these measures absolute UTC bias. **PPP does not measure it either.** PPP solves
-for the F9T's free-running TCXO clock, while TP2 is corrected against the receiver's own
-solution, so antenna and receiver delays do not show up in the result. Measuring them
+for the F9T's free-running TCXO clock, while the time pulse is corrected against the
+receiver's own solution, so antenna and receiver delays do not show up in the result. Measuring them
 takes a calibrated counter against a second reference, or common-view comparison with a
 laboratory.
 
@@ -260,8 +260,8 @@ until a PPP run produces one.
   15 h intervals: the crystal runs **+0.456 ppm** fast, drift accumulates ~25 ms, and the
   receiver puts it back. `ppp-clk-adev` removes and reports the steps; leaving them in gives
   ~2×10⁻⁵ at every τ, which is what the jumps measure, not the oscillator.
-- **This says nothing about TP2.** The pulse is steered against the receiver's own solution and
-  never appears in the PPP clock.
+- **This says nothing about the time pulse.** It is steered against the receiver's own solution
+  and never appears in the PPP clock.
 
 ### Allan deviation on the dashboard
 
@@ -374,7 +374,7 @@ tools/ppp-vs-utcmike --fetch 2609 --ppp full_output.pos
 **As it stands this comparison is not usable, and the 2026-09-30 finals run shows why.** The
 clock CSRS-PPP reports is the F9T's free-running TCXO: +589 us at the start, -11222 us 23 h
 later, drifting -0.141 ppm. MIKES's REFGPS is tens of ns. Differencing them measures our
-crystal. TP2 is corrected against the receiver's own solution and never appears in the PPP
+crystal. The time pulse is corrected against the receiver's own solution and never appears in the PPP
 clock, as the error-budget section above already noted.
 
 The missing link is the receiver's own tie between its clock and the pulse:
@@ -384,6 +384,12 @@ PPS - GPS time = (PPS - receiver clock, from UBX-TIM-TP) - (receiver clock - GPS
 ```
 
 So a RAWX session intended for time transfer must log **UBX-TIM-TP** as well.
+
+> **Superseded 2026-10-02 by rewiring.** Everything in this subsection was measured while the
+> PHY's pulse came from TP2. The coax now runs from **TP1**, so `UBX-TIM-TP`'s `qErr` describes
+> the pulse that feeds the PHY, and the question below — whether TP1's qErr can stand in for
+> TP2's edge — no longer needs an answer. The measurements are kept because they are what made
+> the case for rewiring, and because the 1.5× slope remains unexplained.
 
 **Measured 2026-09-30: TIM-TP describes TP1, not TP2.** Enabling `CFG-MSGOUT-UBX_TIM_TP_UART1`
 in RAM gives one message per second with `qErr` in picoseconds (±3.5 ns sawtooth observed),
@@ -422,6 +428,13 @@ re-running this tool afterwards is its acceptance test — the slope should then
 The empirical 1.5× factor is a curiosity, possibly different rounding granularity in the two
 pulse generators; it is not understood.
 
+**Done 2026-10-02.** The coax moved to TP1 at the bench, and the three keys that make TP1
+behave as TP2 did were written on 2026-10-03: `DUTY_LOCK_TP1 50`, then `USE_LOCKED_TP1 1`,
+then `DUTY_TP1 0`. That order matters — `DUTY_LOCK_TP1` starts at 0, so switching first would
+point the receiver at an empty locked set and stop the pulse. `tools/qerr-vs-extts` has not
+been re-run yet; **its slope coming out at −1.0 is the acceptance test** and is the one piece
+of this story still outstanding.
+
 A free-running variant (ts2phc stopped, the tool holding the EXTTS channel open itself via
 `--enable-extts`, since stopping ts2phc otherwise disables the channel and starves chrony too)
 gave the same picture with far worse SNR: the PHY's oscillator wanders ~95 ns over four minutes,
@@ -430,14 +443,17 @@ its lock.
 
 Consequences:
 
-- **The qErr correction (SatPulse-style) is not available for our pulse** unless TP1 becomes the
-  one wired to J2 pin 9, or unless it is shown that both pulses share the same quantisation.
-  Both are 1 Hz on the same time grid with `ALIGN_TO_TOW`, so their edges should coincide, but
-  that is an assumption until the two outputs are compared on a scope.
+- **The qErr correction (SatPulse-style) is now available in principle**: since 2026-10-02 the
+  wired pulse is TP1, which is the one TIM-TP reports. What is not yet shown is that the
+  correction works — see the acceptance test above. Until `qerr-vs-extts` returns a slope near
+  −1 on the new wiring, treat the correction as untested rather than available.
 - **Both pulses sit on time grid 4 = Galileo** (`CFG-TP-TIMEGRID_TP1/TP2`), confirmed by
   `refInfo (GNSS:Galileo)`. Any comparison against a GPS-time reference such as the BIPM's
   `REFGPS` therefore carries the Galileo-to-GPS time offset (GGTO, a few ns).
-- `tools/ppp-vs-utcmike` stays plumbing until one of those is resolved.
+- `tools/ppp-vs-utcmike` is **unblocked in principle**: the tie between the receiver clock and
+  the pulse now exists, because TIM-TP describes the wired output. It still needs a RAWX session
+  logging `UBX-TIM-TP` alongside, and a MIKES month that overlaps it. The GGTO caveat above
+  still applies, since TP1 also sits on the Galileo grid.
 
 **CGGTTS was tried first and parked** (2026-09-29). `rnx2cggtts` 1.0.2 builds (pin `time` to
 0.3.41 first) and writes a valid CGGTTS header from our RINEX, but produces **zero tracks**:

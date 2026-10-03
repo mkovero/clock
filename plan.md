@@ -11,8 +11,9 @@ Last updated 2026-09-14.
 
 - **The CM4 runs Arch Linux ARM** with a self-built PREEMPT_RT 7.2 kernel since
   2026-09-14; Ubuntu is gone. Paths and services below are the Arch ones.
-- Steps 1 and 2 are done (PPP resubmission still pending). F9T TIME2 is locked-only
-  since 2026-09-14.
+- Steps 1 and 2 are done (PPP resubmission still pending). The F9T's wired pulse moved
+  from TIME2 to **TIME1** on 2026-10-02, and TIME1 is locked-only since 2026-10-03;
+  TIME2 was locked-only from 2026-09-14 and is now the spare.
 - The AR-40A frequency record is building up undisturbed. Leave the trimmer alone
   (Step 3b).
 
@@ -132,7 +133,7 @@ phase centre, so an uncorrected APC position is the self-consistent choice here.
 **Correction to an earlier claim in this plan: PPP does not yield the absolute PPS
 bias.** The clock output is the receiver's own free-running TCXO — `OFF
 11109181 ns`, `DRI 39694531 ns/day`, which is 0.46 ppm and textbook for a TCXO.
-PPP solves the receiver clock from pseudoranges, while the F9T corrects TP2
+PPP solves the receiver clock from pseudoranges, while the F9T corrects the time pulse
 against its own solution, so the antenna and receiver delays do not fall out of
 it. Measuring those needs a calibrated counter against a second reference, or
 common-view against a laboratory. The antenna LNA and receiver delays therefore

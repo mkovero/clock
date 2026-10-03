@@ -45,7 +45,8 @@ unreachable. Observed on several kernels, so it is not a kernel regression.
   driven as a link LED every warm reboot failed (0 of 12); with it off, 8 of 11 survived.
 - **What decides the rest is the moment of the reset within the UTC second**: with LED3 off, resets in one half of
   the second come back at address 2 and in the other half at address 0 (20 of 20 either way, `sysrq-b` fired at a
-  chosen phase). Disabling the F9T's TP2 pulse entirely does not change that, so the PPS on `SYNC_OUT` is not the
+  chosen phase). Disabling the F9T's pulse entirely does not change that — tested with TP2, which fed the PHY until
+  2026-10-02 — so the PPS on `SYNC_OUT` is not the
   trigger; what marks the second is still unidentified. Planned reboots timed to the good half have not failed.
 - **Recovery:** switch the **whole 5 V supply** off for ~30 s (leave the rubidium's 15 V on), then on. A power cycle
   of the CM4 alone is not reliable, and neither is another reboot. A debug kernel patch that follows the PHY to
@@ -56,6 +57,52 @@ unreachable. Observed on several kernels, so it is not a kernel regression.
 
 Plan reboots of the timing host for when someone can power-cycle the rig, unless a kernel with the
 follow-the-address patch is running.
+
+## Several unrelated signals die at once → reseat the CM4
+
+Symptom, 2026-10-02 after moving the rig to a new enclosure: no EXTTS events on `/dev/ptp0` and
+no data from the Teensy on `/dev/ttyAMA5`, while Ethernet, eMMC, the I²C RTC and the F9T's UART
+all worked normally.
+
+Both signals were chased separately and both looked impossible. The pulse was present at the
+TP1 pad, the cable measured end to end, pulses reached 3.2 V at the CM4 end, the J2 connection
+had never been unplugged, and on the software side the PTP pin was already assigned
+`func=extts chan=0`, re-assigning it changed nothing, the channel enabled cleanly, hardware
+timestamping was on, and it was the same kernel build that had logged PPS2 at 11 ns sd minutes
+before the shutdown. The Teensy was equally blameless: heartbeat LED blinking, panel LEDs
+correct, wiring verified pin by pin, continuity good, ground solid.
+
+The answer was in the pin numbers. `Ethernet_SYNC_OUT` is CM4 pin 18 and `GPIO13`/`RXD5` is
+pin 28 — **ten pins apart on the same 100-pin mezzanine connector**. The module had been
+disturbed during the rebuild and was not fully seated. Reseating it fixed both at once.
+
+The trap worth remembering: **tightening the screws is not the same as seating the connectors.**
+The CM4 mates through two DF40 connectors that need a firm, even push to click home. A module
+sitting slightly proud on one side will be held there quite happily by its screws, and power,
+eMMC and the Ethernet pairs will all keep working while a handful of contacts in one region
+never mate. Unscrew it, lift it clear, press both connectors home, then fit the screws.
+
+So: when two or more signals that share a connector fail together and each one individually
+looks impossible, stop chasing them separately and check the seating.
+
+## ts2phc and ptp4l fail at boot, then recover
+
+`ts2phc` logs `failed to open clock` and `ptp4l` logs `ioctl SIOCETHTOOL failed: Invalid
+argument`, both a few seconds into boot; `Restart=always` then picks them up and everything
+works. Harmless in effect, but every cold boot logs failures and the first seconds run with the
+PHC undisciplined.
+
+Cause: `After=sys-subsystem-net-devices-eth0.device` is not the right precondition. The netdev
+exists well before `bcmgenet` registers the PHC and enables hardware timestamping — measured on
+this box, the device unit released at 5.3 s while genet finished at 5.78 s and the link came up
+at 8.87 s.
+
+Fix: an `ExecStartPre` that waits for the *clock*, not the interface. Two things need checking
+because they fail separately — the hardware timestamping capability, which is what SIOCETHTOOL
+rejects, and the `/dev/ptpN` device, which is what ts2phc opens. Watch the field name: ethtool
+before 6.x prints `PTP Hardware Clock: N`, while 7.x prints `Hardware timestamp provider
+index: N`. A wait script matching only one of them silently never succeeds, which turns a
+cosmetic boot warning into a dead timing chain.
 
 ## Dead RTC → gpsd → chrony
 

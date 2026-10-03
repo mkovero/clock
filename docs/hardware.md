@@ -48,6 +48,58 @@ work is in [plan.md](../plan.md).
   not the RF source impedance, which was measured under load.
 - The unit draws 9 W steady. The manual asks for a heatsink of ≤1 °C/W, and heat feeds
   directly into the temperature coefficient.
+- **The rig moved into a closed rack enclosure on 2026-10-02**, which makes that coefficient
+  something to watch rather than quote. The specified ±2×10⁻¹⁰ over −5…+50 °C is about
+  3.6×10⁻¹²/K — the same size as what this station is trying to measure — so a few degrees of
+  steady-state rise matters, and sharing plate area with the CM4 would let CPU load modulate
+  the reference, which aliases with whatever the machine is doing and reads as oscillator
+  instability. The rubidium is bolted to a copper spreader on the panel for that reason:
+  conduction out of the case, rather than relying on airflow a flat enclosure cannot provide.
+  `clock-dashboard` now records every kernel thermal zone and fits the reference frequency
+  against them, so the coefficient becomes a measured number — see
+  [dashboard/README.md](../dashboard/README.md).
+
+### Which DE-9 options this unit actually has
+
+Surveyed 2026-10-01 with a meter, unpowered then powered, injecting nothing. The manual lists
+pins 4, 6, 8 and 9 as options, and nothing says which were fitted:
+
+| Pin | Unpowered | Powered | Verdict |
+|---|---|---|---|
+| 4 Vref 5 V | — | 0 V | **not fitted** |
+| 6 TxD | 12 kΩ, no junction | 5.04 V, ~6 Ω source | **fitted**, 5 V logic idling at mark |
+| 8 Freq Adjust | 75 kΩ, no junction | 1.67 V | **fitted**, live input at a defined bias |
+| 9 RxD | 12 kΩ, 1.3 V in diode mode | 5.04 V | **fitted**, pulled up; 1.3 V is two junctions or an opto |
+
+Pin 6's idle level alone was not conclusive — a static 5 V reads the same whether it is a UART
+idling or a pull-up with no driver. Loading it with 10 kΩ settled it: the level fell only
+3.2 mV, so the source impedance is about 6 Ω, a real push-pull output. Scoping it for 120 s
+armed on a falling edge produced no trigger, so the unit is **command-response** and transmits
+nothing unprompted. The protocol is not in the manual — §3.2.3 says software and instructions
+ship with the digital calibration option — so the link is wired but there is nothing known to
+send down it.
+
+**The floating Freq Adjust input may explain the frequency offset that was trimmed out.**
+§3.2.2 gives the analog option as 0–10 V on pin 8 for at least 3×10⁻⁹ of range, with nominal
+10 MHz **at 5 V**, and warns that "when the voltage is not connected the output frequency may
+deviate from 10 MHz". Pin 8 on this unit floats at **1.67 V**, which is 3.33 V below nominal —
+and 1.67 V is 5/3, consistent with a divider of roughly 225 k over 112 k off an internal 5 V
+rail given the 75 kΩ measured unpowered. The rubidium was found at **−2.55×10⁻⁹** and trimmed
+mechanically to +2.2×10⁻¹¹, using about 5.25 of the trimmer's 10 turns. A sensitivity of
+7.7×10⁻¹⁰/V — well inside the specified "±1.5×10⁻⁹ min" — accounts for the whole of it. If that
+is right, half the mechanical range was spent compensating for an unconnected pin.
+
+**So do not simply strap pin 8 to 5 V**: the frequency would jump by up to +2.5×10⁻⁹ and the
+trimmer would need winding back several turns. The pin is wired out to its own connector with
+100 nF to the quiet ground and **left floating**, pending a stepped experiment — start at the
+1.67 V the pin already sits at so nothing moves, step toward 5 V an hour at a time, and read the
+slope off chrony's drift file at 1×10⁻¹² resolution. That also tests whether the option is fitted
+at all: if nothing moves, it never was.
+
+With Vref absent there is no on-board reference to steer from, so an analog loop would put an
+external source's drift straight into the frequency path. At 3×10⁻¹⁰ per volt the requirements
+are mild — a millivolt of DAC noise is 3×10⁻¹³, and a 5 V reference at 10 ppm/K contributes
+about 1×10⁻¹⁴/K — but it is a term that does not exist today.
 
 ## Pad and levels
 
@@ -176,11 +228,19 @@ Software is described in [timing.md](timing.md).
   port is `/dev/ttyAMA0` at **460800** (since 2026-09-19). USB is not used for two
   reasons: the breakout ties header +5V to VBUS, so a cable would parallel the supplies,
   and CM4 USB sits behind the VL805 on PCIe. Don't hand-wire the USB D+/D− header pins.
-- **1 PPS:** TIME2 → CM4 J2 pin 9 over miniature coax with 47 Ω in series at the F9T
-  end. **The shield is grounded at the CM4 end only.** At the CM4 the pulse measures
-  3.32 Vpp with 18 ns rise, which confirms the pin is 3.3 V even though some CM4 documents
-  say 1.8 V.
-- **TIME1** is kept free for TP1 quantisation-error reporting and as a scope reference.
+- **1 PPS:** TIME1 → CM4 J2 pin 9 over miniature coax with 47 Ω in series at the F9T
+  end, and **1.5 kΩ from J2 pin 9 to pin 10** (the adjacent ground on that 2×7 header).
+  **The shield is grounded at the CM4 end only.** At the CM4 the pulse measures 3.32 Vpp
+  with 18 ns rise, which confirms the pin is 3.3 V even though some CM4 documents say 1.8 V.
+  The pulse moved from TIME2 to TIME1 on 2026-10-02 so that `UBX-TIM-TP`'s quantisation
+  error describes the pulse in use; TIM-TP reports TP1 only.
+  The pull-down is there for noise immunity on a high-impedance input, and earns its keep a
+  second way: it gives the far end a defined DC load, so the whole run reads **≈1.55 kΩ**
+  from the TIME1 pad and can be continuity-checked with a meter without opening the case.
+  Without it a high-impedance input is indistinguishable from a broken wire at DC, which is
+  exactly the hole that cost an evening on 2026-10-02.
+- **TIME2** is now the spare: still enabled and pulsing on its own pad as a scope reference,
+  no longer wired anywhere.
 - **EXTINT** is brought out to a BNC. It is unconnected and not isolated, reserved for
   the rubidium ÷10⁷ PPS from the planned [timing board](timing-board.md) (UBX-TIM-TM2).
 - **Header:** +5V, GND, RX(2)/TX(2), TIME(2)/TIME(1), EXTINT, READY, SCL/SPI_CLK,

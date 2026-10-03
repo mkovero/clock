@@ -18,9 +18,10 @@ To make the comparison mean something, the PPS has to be tied to the receiver cl
 
     PPS - GPS time = (PPS - receiver clock, from UBX-TIM-TP) - (receiver clock - GPS time, PPP)
 
-so a RAWX session for this purpose must log UBX-TIM-TP alongside. Whether the F9T reports
-TIM-TP for TP2 (our pulse) or only TP1 is unresolved. Until that is settled, this tool is
-only good for parsing and plumbing, not for a number you can quote.
+so a RAWX session for this purpose must log UBX-TIM-TP alongside. That tie now exists: the
+PHY's pulse was rewired from TP2 to TP1 on 2026-10-02, and TIM-TP reports TP1. What is still
+missing is a RAWX session logging TIM-TP with it, and a MIKES month that overlaps. Until then
+this tool is only good for parsing and plumbing, not for a number you can quote.
 
 Usage:
     ppp-vs-utcmike --mike mike2609.gpi --ppp full_output.pos
@@ -171,7 +172,7 @@ def main():
     print(f"our clock - UTC(MIKE):  mean {mean:+.1f} ns  sd {sd:.1f} ns  "
           f"median {diffs[n // 2]:+.1f}  min {diffs[0]:+.1f}  max {diffs[-1]:+.1f}")
     print("\nThat mean includes our uncompensated antenna, LNA, cable and receiver delays,")
-    print("and says nothing about the TP2 edge itself. See docs/timing.md.")
+    print("and says nothing about the time pulse's own edge. See docs/timing.md.")
 
 
 if __name__ == "__main__":
