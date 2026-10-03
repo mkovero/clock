@@ -64,6 +64,12 @@ lock_all
   PHY, not to a UART handshake line. gpsd's startup `unable to read /dev/pps0` error is a
   race against the device appearing, and is harmless.
 - Use the drift file (`ref_freq_offset` in `gpsstat`) to judge rubidium frequency.
+- **But check `drift file age` with it.** chrony writes that file about hourly, so the value can
+  be up to an hour stale, and across a restart it keeps the *pre-reboot* number until chrony
+  next writes. On 2026-10-03 that made a change which actually happened at power-on look like a
+  1.5×10⁻⁹ step three hours later, when the file was finally refreshed. `chronyc tracking`
+  is live but quantises to 10⁻⁹, so the two are complementary: the drift file for resolution,
+  its age and `chronyc` for whether the number is current.
   `chronyc tracking` rounds to 1×10⁻⁹.
 
 ### gpsd
@@ -262,6 +268,26 @@ until a PPP run produces one.
   ~2×10⁻⁵ at every τ, which is what the jumps measure, not the oscillator.
 - **This says nothing about the time pulse.** It is steered against the receiver's own solution
   and never appears in the PPP clock.
+
+### Rubidium retrace: the frequency does not come back
+
+Measured across the enclosure rebuild. The AR-40A held **+42×10⁻¹²** against GNSS before being
+powered down on 2026-09-30, after the 2026-09-21 trim put it at +2.2×10⁻¹¹. Two days off, and it
+came back at about **+1.5×10⁻⁹** — a shift of 1.46×10⁻⁹, which is roughly three turns of the
+mechanical trimmer.
+
+That is retrace, not temperature. The specified coefficient is ±2×10⁻¹⁰ across the whole
+−5…+50 °C range, so thermal effects cannot produce seven times that span however warm the new
+case runs. It is also not the time-grid switch made the same night: chrony's `tracking.log`
+shows the frequency estimate already settled at its new value an hour *before* the grid changed,
+and unchanged across it, which is what a phase step must do.
+
+Nothing is being done about it. chrony carries the offset, trimming buys nothing for
+timekeeping, and a trim would restart the aging record (plan.md Step 3b). It is recorded because
+it sets expectations for the next power cycle: **a rubidium that has been switched off does not
+return to where it was**, and anything derived from the raw 10 MHz needs re-checking afterwards.
+Retrace also keeps settling for hours to days, so the figure above is a starting point rather
+than the new resting value.
 
 ### Allan deviation on the dashboard
 
