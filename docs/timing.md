@@ -548,7 +548,7 @@ for ubxtool.
 | `ubx-dump-config` | full CFG dump, RAM and Flash, paged |
 | `ubx-apply-config` | apply a key/value file and verify each write by reading it back |
 | `f9t-restore`, `f9t-restore.service` | compare the receiver with `f9t-known-good.txt` and write back only what differs: `--check`, RAM (default, also once per boot), `--persist` (RAM + BBR + Flash) |
-| `f9t-rawlog` | log RAWX/SFRBX for PPP without leaving fixed mode; checks UART margin first |
+| `f9t-rawlog` | log RAWX/SFRBX **and UBX-TIM-TP** for PPP without leaving fixed mode; checks UART margin first. TIM-TP is what makes a session usable for time transfer, and it is enabled unconditionally because the tie cannot be reconstructed afterwards |
 | `f9t-ppp` | RAWX → RINEX via `convbin` for PPP submission |
 | `f9t-survey` | standalone position survey (rover mode), then write the result into TMODE |
 | `f9t-skymap` | C/N0 and carrier-phase yield by azimuth and elevation from a RAWX log — what the antenna can see |

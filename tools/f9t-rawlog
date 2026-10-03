@@ -97,6 +97,12 @@ cmd_start() {
 	echo "Enabling raw observations (RAM layer — a reboot reverts them):"
 	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 1 1 && echo "  RXM-RAWX on"
 	setkey CFG-MSGOUT-UBX_RXM_SFRBX_UART1 1 1 && echo "  RXM-SFRBX on"
+	# TIM-TP ties the pulse to the receiver clock, which is what turns a PPP session into a
+	# time-transfer session: PPS - GPS time = (PPS - receiver clock, TIM-TP) - (receiver clock
+	# - GPS time, PPP). Enabled unconditionally because it costs about 36 bytes a second
+	# against RAWX's ~800 per epoch, and because a session logged without it cannot be used
+	# for time transfer afterwards - the tie cannot be reconstructed later.
+	setkey CFG-MSGOUT-UBX_TIM_TP_UART1 1 1 && echo "  TIM-TP on"
 
 	{
 		echo "started=$(date -Is)"
@@ -157,6 +163,13 @@ while True:
 rawx = c.get((0x02, 0x15), 0)
 print(f"RXM-RAWX  {rawx} epochs (~{rawx/3600:.1f} h at 1 Hz)")
 print(f"RXM-SFRBX {c.get((0x02,0x13),0)} records")
+timtp = c.get((0x0d, 0x01), 0)
+if timtp and rawx and timtp >= 0.9 * rawx:
+    print(f"TIM-TP    {timtp} records (pulse/clock tie present)")
+elif timtp:
+    print(f"TIM-TP    {timtp} records -- GAPPY against {rawx} RAWX epochs; time transfer will have holes")
+else:
+    print("TIM-TP    none -- this session CANNOT be used for time transfer")
 if rawx and rawx < 6*3600:
     print(f"          PPP wants 6 h or more; {(6*3600-rawx)/3600:.1f} h to go")
 PY
@@ -166,6 +179,7 @@ cmd_stop() {
 	echo "Disabling raw observations:"
 	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 0 1 && echo "  RXM-RAWX off"
 	setkey CFG-MSGOUT-UBX_RXM_SFRBX_UART1 0 1 && echo "  RXM-SFRBX off"
+	setkey CFG-MSGOUT-UBX_TIM_TP_UART1 0 1 && echo "  TIM-TP off"
 	if [ -f "$META" ]; then
 		# shellcheck disable=SC1090
 		. "$META"
@@ -208,6 +222,15 @@ cmd_watchdog() {
 		echo "$stamp watchdog: RAWX disabled on the receiver, re-enabling"
 		setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 1 1
 		setkey CFG-MSGOUT-UBX_RXM_SFRBX_UART1 1 1
+	fi
+
+	# Checked separately from RAWX, because the two can diverge: TIM-TP was enabled by hand
+	# during the 2026-10-03 session while RAWX was already running, so a reboot would have
+	# left RAWX restored by the branch above and TIM-TP quietly missing. A session that looks
+	# healthy in status and cannot be used for time transfer is the worst outcome here.
+	if [ "$(getkey CFG-MSGOUT-UBX_TIM_TP_UART1)" != "1" ]; then
+		echo "$stamp watchdog: TIM-TP disabled on the receiver, re-enabling"
+		setkey CFG-MSGOUT-UBX_TIM_TP_UART1 1 1
 	fi
 }
 
