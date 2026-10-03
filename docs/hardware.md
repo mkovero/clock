@@ -48,8 +48,10 @@ work is in [plan.md](../plan.md).
   not the RF source impedance, which was measured under load.
 - The unit draws 9 W steady. The manual asks for a heatsink of ≤1 °C/W, and heat feeds
   directly into the temperature coefficient.
-- **The rig moved into a closed rack enclosure on 2026-10-02**, which makes that coefficient
-  something to watch rather than quote. The specified ±2×10⁻¹⁰ over −5…+50 °C is about
+- **The rig moved into a new rack enclosure on 2026-10-02 — still open at the time of writing**,
+  with the lid yet to go on, which makes that coefficient something to watch rather than quote.
+  Everything measured since the move is therefore an open-case figure and is not the number the
+  finished build will settle at. The specified ±2×10⁻¹⁰ over −5…+50 °C is about
   3.6×10⁻¹²/K — the same size as what this station is trying to measure — so a few degrees of
   steady-state rise matters, and sharing plate area with the CM4 would let CPU load modulate
   the reference, which aliases with whatever the machine is doing and reads as oscillator

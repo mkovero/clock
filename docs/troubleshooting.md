@@ -106,7 +106,10 @@ cosmetic boot warning into a dead timing chain.
 
 ## The RF interference baselines moved after a rebuild
 
-Noticed 2026-10-03, the day after the rig moved into a new rack enclosure. Daily medians from
+Noticed 2026-10-03, the day after the rig moved into a new rack enclosure. **The case is still
+open**, so these are open-case figures: whatever shielding the finished build provides is not
+yet in place, and closing it will move these numbers again — upward if the source is inside the
+box, downward if it is outside. Daily medians from
 the dashboard history, before (17–30 Sep) against after:
 
 | block | AGC | noise/ms | jamInd | C/N0 best |

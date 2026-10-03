@@ -104,9 +104,10 @@ reference frequency against each of them by least squares over the last seven da
 bucketed hourly for the same reason the Allan deviation is: chrony writes the drift file
 hourly, so five-minute samples repeat it about twelve times.
 
-This became worth recording when the enclosure was closed on 2026-09-30. A rubidium moves
+This became worth recording when the rig moved into a rack enclosure on 2026-10-02, which will
+be closed once the build is finished. A rubidium moves
 a few parts in 10^11 across its rated range, so a few degrees is the same size as what
-this rig is trying to measure, and with the lid on the reference and the CM4 share one
+this rig is trying to measure, and once the lid is on the reference and the CM4 share one
 thermal volume — which means CPU load can reach the reference. The card reports the slope
 in parts in 10^12 per kelvin with its correlation.
 
