@@ -113,7 +113,11 @@ def main():
     weeks = sorted({r["week"] for r in rows})
     bases = sorted({r["time_base"] for r in rows})
     gnss = sorted({str(r["ref_gnss"]) for r in rows})
-    span = max(r["tow_s"] for r in rows) - min(r["tow_s"] for r in rows)
+    # Fold the week number in: a session that crosses a GPS week boundary (Saturday
+    # midnight UTC) has tow_s wrap to zero, and comparing tow alone then reports a
+    # bogus span of a whole week and an equally bogus 5.9-day "gap".
+    secs = sorted(r["week"] * GPS_EPOCH_WEEK_SECS + r["tow_s"] for r in rows)
+    span = secs[-1] - secs[0]
 
     print(f"{path}: {len(rows)} TIM-TP records, {len(usable)} with qErr valid")
     print(f"  week {weeks if len(weeks) < 4 else f'{weeks[0]}..{weeks[-1]}'}  "
@@ -134,8 +138,7 @@ def main():
               "the pulse moved between time scales and the series is not continuous")
 
     # a 1 Hz pulse should give one record per second; gaps mean the message was off
-    tows = sorted(r["tow_s"] for r in rows)
-    gaps = [(b - a) for a, b in zip(tows, tows[1:]) if b - a > 1.5]
+    gaps = [(b - a) for a, b in zip(secs, secs[1:]) if b - a > 1.5]
     if gaps:
         print(f"  {len(gaps)} gaps totalling {sum(gaps):.0f} s "
               f"(largest {max(gaps):.0f} s) -- those seconds have no pulse/clock tie")
