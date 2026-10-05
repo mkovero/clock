@@ -70,7 +70,19 @@ lock_all
   1.5×10⁻⁹ step three hours later, when the file was finally refreshed. `chronyc tracking`
   is live but quantises to 10⁻⁹, so the two are complementary: the drift file for resolution,
   its age and `chronyc` for whether the number is current.
-  `chronyc tracking` rounds to 1×10⁻⁹.
+- **Upstream has fixed the quantisation, after this came up on the chrony list.** Miroslav
+  Lichvar added a **`-E`** option to `chronyc` that prints values in `%e` notation, in both
+  normal and CSV modes. In normal mode the precision is trimmed to keep the report columns
+  aligned, so some fields — skew in `sources`, for instance — come out with a single
+  significant digit, but **`tracking` carries full precision**. It is in git and not in a
+  release: this station runs chrony 4.9, where `chronyc -E` is still `invalid option`.
+
+  When it reaches a release and Arch, `chronyc -E tracking` becomes a live, full-precision
+  source of the rubidium's frequency offset — which is exactly what the drift file cannot be
+  (hourly, and stale across a restart) and what `tools/rb-freq-live` exists to work around by
+  reading the kernel's own frequency instead. Worth revisiting both `gpsstat`'s drift-file
+  path and `rb-freq-live` then; note that the `sources` skew column will still be coarse, so
+  this replaces the drift file for frequency, not for everything.
 
 ### gpsd
 
