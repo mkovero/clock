@@ -415,11 +415,13 @@ def ref_freq_adev(samples: list[dict], window_hours: int = 24 * 7) -> dict | Non
 def read_temperatures(extra: list[str] | None = None) -> dict[str, float]:
     """Every kernel thermal zone, plus any sensor named on the command line, in degrees C.
 
-    The enclosure is closed from 2026-09-30, which makes temperature part of the frequency
-    record rather than a curiosity: a rubidium moves a few parts in 10^11 across its rated
-    range, so a few degrees is the same size as what this rig is trying to measure. The CM4
-    die is not the rubidium's baseplate, but with the lid on it is a usable proxy for the
-    case, and it also reports the CPU load that heats the case in the first place. An actual
+    The enclosure is **still open** as of 2026-10-05 — the lid goes on after the phase scan,
+    which needs the box on a bench. Temperature is recorded anyway, because it becomes part of
+    the frequency record the moment the lid is on: a rubidium moves a few parts in 10^11 across
+    its rated range, so a few degrees is the same size as what this rig is trying to measure.
+    The CM4 die is not the rubidium's baseplate, but with the lid on it is a usable proxy for
+    the case, and it also reports the CPU load that heats the case in the first place. Until
+    then these are open-case numbers and the correlation below is not expected to show much. An actual
     baseplate sensor goes in through --temp-sensor when one is fitted.
 
     Values are read as millidegrees when they exceed 200, which is how the kernel reports
@@ -451,8 +453,8 @@ def read_temperatures(extra: list[str] | None = None) -> dict[str, float]:
 def temp_freq_sensitivity(samples: list[dict], window_hours: int = 24 * 7) -> dict | None:
     """Least-squares sensitivity of the reference frequency to temperature, per sensor.
 
-    The question the closed enclosure raises is whether case temperature — and through it
-    CPU load — moves the rubidium. This fits frequency against each temperature and reports
+    The question the enclosure raises, once its lid is on, is whether case temperature — and
+    through it CPU load — moves the rubidium. This fits frequency against each temperature and reports
     the slope with its correlation, so a real thermal coefficient can be told apart from two
     series that merely drift in the same week.
 
