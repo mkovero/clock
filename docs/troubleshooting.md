@@ -110,13 +110,24 @@ Noticed 2026-10-03, the day after the rig moved into a new rack enclosure, while
 still open** — so the table below is open-case figures, taken before whatever shielding the
 finished build provides was in place.
 
-**The case was closed at 2026-10-07T00:28Z**, which is the test: closing moves these numbers
-upward if the source is inside the box and downward if it is outside. The first closed-case
-sample, taken at the boundary, has block 0 `jamInd` at **15**/255 (AGC 5967, noise 70) and block 1
-at **21**/255 (AGC 5616, noise 47) — both **down** from the open-case medians of 32 and 25, which
-points outside. That is one instant right after a cold boot rather than a daily median, so it wants
-a few days of dashboard history before it is worth believing; if it holds, the 10 MHz harmonic
-hypothesis below loses most of its motivation and the spectrum hunt drops down the list. Daily medians from
+**The case was closed at 2026-10-07T00:28Z, and that settled it.** Closing moves these numbers
+upward if the source is inside the box and downward if it is outside. From 237 samples over the
+first ~20 h with the lid on, against 1124 samples from the open-case period of 10-03..10-06:
+
+| block | jamInd open | jamInd closed | AGC | noise |
+|---|---|---|---|---|
+| 0 (L1) | median 31, sd 1.2 | **median 18**, sd 2.3 | 5967 → 5967 | 68 → 67 |
+| 1 (L2) | median 24, sd 0.7 | **median 21**, sd 0.6 | 5616 → 5616 | 48 → 47 |
+
+**Both fell and neither AGC moved, so the interferer is outside the box** and the enclosure shields
+against it. Block 0 dropped 13 points, block 1 three. That **retires the 10 MHz-harmonic hypothesis
+below as the leading suspect** — a source inside the case, sharing it with the antenna feed, should
+have got worse when the lid went on, not better. The spectrum hunt (`sys/aika2arch/bench-measure-20261006.md`
+§E) is therefore parked rather than pending.
+
+`tools/gpsstat`'s site baselines were re-derived from this data at the same time: `0:18 1:21` with
+the tolerance tightened from ±15 to ±8. The old `0:60 1:7` was from 2026-09-10..13 in the previous
+enclosure and had block 0 warning permanently for being *better* than its stale baseline. Daily medians from
 the dashboard history, before (17–30 Sep) against after:
 
 | block | AGC | noise/ms | jamInd | C/N0 best |

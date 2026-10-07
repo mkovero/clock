@@ -38,15 +38,29 @@ VERBOSE=0
 F9T_TARGET="${F9T_TARGET:-localhost:2947:/dev/ttyAMA0}"
 
 # Site baseline for the MON-RF CW interference indicator, as "block:value" pairs.
-# In central Helsinki block 0 (L1/E1/B1) reads a steady 57-63 at every hour of
-# the day, AGC unchanged, and the receiver classifies that as WARNING. Three days
-# of dashboard history (2026-09-10..13) showed no daily pattern, with C/N0,
-# satellites used and tAcc all healthy throughout. That is the site's RF floor,
-# not an event: reported as a NOTE, and only a departure from it is a WARN.
-# Whether it is city background or a spur from the rig's own clocks is still
-# open — a UBX-MON-SPAN capture would tell.
-F9T_RF_BASELINE="${F9T_RF_BASELINE:-0:60 1:7}"
-F9T_RF_TOLERANCE="${F9T_RF_TOLERANCE:-15}"
+# This is the site's RF floor rather than an event: reported as a NOTE, and only a
+# departure from it is a WARN.
+#
+# Re-derived 2026-10-07 from 237 samples (~20 h) with the enclosure CLOSED. It has
+# moved twice and both moves are understood, so the history is worth keeping:
+#
+#   2026-09-10..13, old enclosure   block 0: 57-63     block 1: ~7
+#   2026-10-03..06, new case, open  block 0: median 31 block 1: median 24
+#   2026-10-07+,    new case, shut  block 0: median 18 block 1: median 21
+#
+# The second move came with the rack rebuild. The third came with the lid: both
+# blocks FELL when the case was closed (block 0 by 13, block 1 by 3) while AGC
+# (5967 / 5616) and noise (67 / 47) did not budge. docs/troubleshooting.md predicted
+# up-if-inside and down-if-outside, so the interferer is OUTSIDE the box and the
+# case shields against it — which also retires the 10 MHz-harmonic hypothesis as
+# the main suspect.
+#
+# Tolerance tightened from 15 to 8. The closed-case spread is small (block 0 sd 2.3,
+# observed 15-25; block 1 sd 0.6, observed 20-26), so +-8 covers both with margin
+# while still being able to see a real change. The old 60+-15 made block 0 warn
+# permanently for being BETTER than its stale baseline.
+F9T_RF_BASELINE="${F9T_RF_BASELINE:-0:18 1:21}"
+F9T_RF_TOLERANCE="${F9T_RF_TOLERANCE:-8}"
 
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT
