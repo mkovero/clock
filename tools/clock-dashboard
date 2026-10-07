@@ -415,13 +415,12 @@ def ref_freq_adev(samples: list[dict], window_hours: int = 24 * 7) -> dict | Non
 def read_temperatures(extra: list[str] | None = None) -> dict[str, float]:
     """Every kernel thermal zone, plus any sensor named on the command line, in degrees C.
 
-    The enclosure is **still open** as of 2026-10-05 — the lid goes on after the phase scan,
-    which needs the box on a bench. Temperature is recorded anyway, because it becomes part of
-    the frequency record the moment the lid is on: a rubidium moves a few parts in 10^11 across
-    its rated range, so a few degrees is the same size as what this rig is trying to measure.
-    The CM4 die is not the rubidium's baseplate, but with the lid on it is a usable proxy for
-    the case, and it also reports the CPU load that heats the case in the first place. Until
-    then these are open-case numbers and the correlation below is not expected to show much. An actual
+    The enclosure was **closed at 2026-10-07T00:28Z**, so temperature is now part of the
+    frequency record rather than a curiosity: a rubidium moves a few parts in 10^11 across its
+    rated range, so a few degrees is the same size as what this rig is trying to measure. The CM4
+    die is not the rubidium's baseplate, but with the lid on it is a usable proxy for the case,
+    and it also reports the CPU load that heats the case in the first place. Readings before that
+    timestamp are open-case numbers and should not be mixed into a fit with later ones. An actual
     baseplate sensor goes in through --temp-sensor when one is fitted.
 
     Values are read as millidegrees when they exceed 200, which is how the kernel reports
