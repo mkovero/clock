@@ -528,6 +528,14 @@ Consequences:
   `refInfo` low nibble 3 → 0), precisely so that a comparison against a GPS-time reference such
   as the BIPM's `REFGPS` does not carry the Galileo-to-GPS offset. TP2, the unwired spare, stays
   on grid 4. The switch was itself a measurement — see below.
+- **The tie's premise is disputed as of 2026-10-08 — see [pulse-to-gps-tie.md](pulse-to-gps-tie.md)
+  before using any of this.** Run against a good multi-GNSS rapid solution (3011 clock records), the
+  sign self-check still cannot discriminate, and the reason is structural rather than data: it scores
+  `abs(drift)`, so two series differing only in one term's sign always tie. Behind that, the premise
+  that one sign "cancels" the TCXO drift appears wrong, because `PPS − tow` carries no drift to
+  cancel it with (qErr is bounded at −4.05…+3.81 ns, sd 2.26 ns). The likely correction is that
+  `PPS − GPS = −qErr` and the receiver clock does not belong in it at all. The tool refuses to quote
+  a number, which is the right outcome; nothing has been changed yet.
 - `tools/ppp-vs-utcmike` **implements the tie as of 2026-10-03**, via `--timtp` (a CSV from
   `tools/ubx-timtp`) and `--clk` (the RINEX CLOCK file from the PPP archive). It no longer
   needs a MIKES file to run: without one it computes and prints our own PPS − GPS time series
@@ -542,7 +550,11 @@ Consequences:
   this receiver's clock). Verified on synthetic data with a planted 25.0 ns offset and 0.456 ppm
   drift: recovered +25.0 ns at 2.5 ns sd with 0.0000 ppm residual, the wrong sign reported
   0.9120 ppm — exactly twice the planted drift — and a deliberately mismatched clock file was
-  refused.
+  refused. **That validation is now suspect**: the synthetic series was generated with the premise
+  built in, giving `PPS − tow` the clock's drift, so it confirmed the assumption rather than testing
+  it — and it hides the `abs()` defect, because a planted pulse-term drift makes the two signs
+  genuinely unequal in magnitude. A self-check validated only against data generated from its own
+  assumption is not a self-check.
 
   The tie between the receiver clock and the pulse now exists because TIM-TP describes the
   wired output, and the GGTO term has been removed by moving to the GPS grid. It still needs a RAWX session logging `UBX-TIM-TP`
