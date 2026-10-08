@@ -528,37 +528,25 @@ Consequences:
   `refInfo` low nibble 3 → 0), precisely so that a comparison against a GPS-time reference such
   as the BIPM's `REFGPS` does not carry the Galileo-to-GPS offset. TP2, the unwired spare, stays
   on grid 4. The switch was itself a measurement — see below.
-- **The tie's premise is disputed as of 2026-10-08 — see [pulse-to-gps-tie.md](pulse-to-gps-tie.md)
-  before using any of this.** Run against a good multi-GNSS rapid solution (3011 clock records), the
-  sign self-check still cannot discriminate, and the reason is structural rather than data: it scores
-  `abs(drift)`, so two series differing only in one term's sign always tie. Behind that, the premise
-  that one sign "cancels" the TCXO drift appears wrong, because `PPS − tow` carries no drift to
-  cancel it with (qErr is bounded at −4.05…+3.81 ns, sd 2.26 ns). The likely correction is that
-  `PPS − GPS = −qErr` and the receiver clock does not belong in it at all. The tool refuses to quote
-  a number, which is the right outcome; nothing has been changed yet.
-- `tools/ppp-vs-utcmike` **implements the tie as of 2026-10-03**, via `--timtp` (a CSV from
-  `tools/ubx-timtp`) and `--clk` (the RINEX CLOCK file from the PPP archive). It no longer
-  needs a MIKES file to run: without one it computes and prints our own PPS − GPS time series
-  and stops, which is what can be done before the BIPM publishes the month.
+- **The tie was rebuilt on 2026-10-08 — [pulse-to-gps-tie.md](pulse-to-gps-tie.md) has the
+  diagnosis and the numbers.** The original version tied TIM-TP straight to the PPP clock and
+  guessed the sign from which one cancelled the TCXO drift. Neither could, because the pulse is
+  already placed by the receiver's own clock estimate, and the scorer took `abs()`, so it could
+  never choose anyway. Its synthetic validation was generated with that premise built in, which is
+  why it passed.
 
-  **It checks its own sign convention rather than asserting one.** The receiver clock is a
-  free-running TCXO drifting ~0.46 ppm — 40 ms a day — while a steered pulse sits within
-  nanoseconds of GPS time, so of the two possible signs exactly one cancels that drift and the
-  other doubles it. Both are computed and the smaller residual wins; if neither is small the
-  tool refuses to quote a number and exits 1, because that means an assumption is wrong (most
-  likely that RINEX CLOCK epochs and TIM-TP both carry GPS time, or that the AR records are
-  this receiver's clock). Verified on synthetic data with a planted 25.0 ns offset and 0.456 ppm
-  drift: recovered +25.0 ns at 2.5 ns sd with 0.0000 ppm residual, the wrong sign reported
-  0.9120 ppm — exactly twice the planted drift — and a deliberately mismatched clock file was
-  refused. **That validation is now suspect**: the synthetic series was generated with the premise
-  built in, giving `PPS − tow` the clock's drift, so it confirmed the assumption rather than testing
-  it — and it hides the `abs()` defect, because a planted pulse-term drift makes the two signs
-  genuinely unequal in magnitude. A self-check validated only against data generated from its own
-  assumption is not a self-check.
+  The tie is now `PPS − GPS = (receiver's clock bias − PPP's clock bias) − qErr`.
+  `tools/ubx-rxclock` gets the receiver's bias from RAWX `rcvTow` and NAV-TIMEGPS `iTOW + fTOW`
+  (and NAV-CLOCK when logged), and `tools/ppp-vs-utcmike --timtp --clk --rxclock` subtracts. The
+  TCXO cancels, nothing is fitted, and a wrong sign shows up as ~465 µs instead of tens of ns, so
+  the tool refuses it. On the 10-03 session: **PPS − GPS = −17.5 ns, sd 9.2 ns,
+  −10.8 ns/day**. That excludes the LNA delay, and it includes a ~9 ns term from a 7.8 m
+  disagreement between the receiver's configured position and that session's PPP position, which
+  is now the open question.
 
-  The tie between the receiver clock and the pulse now exists because TIM-TP describes the
-  wired output, and the GGTO term has been removed by moving to the GPS grid. It still needs a RAWX session logging `UBX-TIM-TP`
-  alongside, and a MIKES month that overlaps it — the BIPM publishes `mikeYYMM.gpi` a couple of
+  TIM-TP describes the wired output, and the GGTO term has been removed by moving to the GPS grid.
+  A session needs RAWX, NAV-TIMEGPS and `UBX-TIM-TP` logged together (`f9t-rawlog` also enables
+  NAV-CLOCK from 2026-10-08), and a MIKES month that overlaps it — the BIPM publishes `mikeYYMM.gpi` a couple of
   weeks after month end, so an October session yields a number in mid-November. That publication
   date is the binding constraint; CSRS-PPP returns rapid products in about a day and finals in
   about two weeks.

@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""ubx-rxclock -- the receiver's own clock-bias estimate, per measurement epoch, from a raw .ubx log.
+
+    ubx-rxclock <log.ubx> [--csv out.csv]
+
+This is the other half of the pulse-to-GPS tie (docs/pulse-to-gps-tie.md). The F9T places its
+pulse using its *own* estimate of how far its free-running TCXO is from GPS time; PPP estimates
+the same quantity independently. Their difference is how wrong the receiver was, and that is
+what PPS - GPS time is made of:
+
+    PPS - GPS  =  (receiver's clock bias - PPP's clock bias)  -  qErr
+
+with both biases defined as receiver clock - GPS time, the RINEX CLOCK convention for AR records.
+
+Two sources, written side by side so they can be checked against each other:
+
+    bias_ns   from RXM-RAWX and NAV-TIMEGPS, which every session since 2026-09 has logged.
+              RAWX's rcvTow is the epoch in receiver time; NAV-TIMEGPS gives the same epoch in
+              GPS time as iTOW + fTOW. Their difference is the clock bias. Computed in integer
+              nanoseconds: seconds since 1980 held in a double resolve only ~238 ns, which
+              looks exactly like a noisy receiver.
+    clkb_ns   from NAV-CLOCK, when the log has it (f9t-rawlog enables it from 2026-10-08).
+              Blank otherwise. Its sign is not assumed: compare it against bias_ns.
+
+Rows are keyed by rcvTow, which is exactly what CSRS-PPP's AR epoch tags carry (e.g. 59.991 s),
+so they pair with the .clk without interpolation.
+
+RAWX payload (header part): rcvTow R8 s, week U2, leapS I1, numMeas U1, recStat X1
+NAV-TIMEGPS (16 bytes):     iTOW U4 ms, fTOW I4 ns, week I2, leapS I1, valid X1, tAcc U4 ns
+NAV-CLOCK (20 bytes):       iTOW U4 ms, clkB I4 ns, clkD I4 ns/s, tAcc U4 ns, fAcc U4 ps/s
+"""
+
+import struct
+import sys
+
+WEEK_MS = 604800 * 1000
+RAWX, TIMEGPS, CLOCK = (0x02, 0x15), (0x01, 0x20), (0x01, 0x22)
+
+
+def checksum(buf):
+    """Fletcher-8 over class, id, length and payload."""
+    a = b = 0
+    for byte in buf:
+        a = (a + byte) & 0xFF
+        b = (b + a) & 0xFF
+    return a, b
+
+
+def messages(data, wanted):
+    """Yield ((cls, id), payload) for checksummed UBX messages of the wanted types."""
+    i, n = 0, len(data)
+    while True:
+        i = data.find(b"\xb5\x62", i)
+        if i < 0 or i + 8 > n:
+            return
+        key = (data[i + 2], data[i + 3])
+        end = i + 6 + int.from_bytes(data[i + 4:i + 6], "little")
+        if end + 2 > n:
+            return
+        if key in wanted and (data[end], data[end + 1]) == checksum(data[i + 2:end]):
+            yield key, data[i + 6:end]
+            i = end + 2
+        else:
+            i += 2
+
+
+def collect(data):
+    """rcvTow epochs, and NAV-TIMEGPS / NAV-CLOCK by absolute GPS milliseconds."""
+    rawx, timegps, clock = [], {}, {}
+    for key, p in messages(data, {RAWX, TIMEGPS, CLOCK}):
+        if key == RAWX and len(p) >= 16:
+            tow, week, _leap, _nmeas, stat = struct.unpack_from("<dHbBB", p)
+            # rcvTow is on a whole-millisecond grid; round to it so integer arithmetic is exact
+            rawx.append((week * WEEK_MS + round(tow * 1000), stat))
+        elif key == TIMEGPS and len(p) == 16:
+            itow, ftow, week, _leap, valid, tacc = struct.unpack("<IihbBI", p)
+            if valid & 0x03 == 0x03:          # towValid and weekValid
+                timegps[week * WEEK_MS + itow] = (ftow, tacc)
+        elif key == CLOCK and len(p) == 20:
+            itow, clkb, clkd, tacc, _facc = struct.unpack("<IiiII", p)
+            # NAV-CLOCK carries no week, so it is keyed by iTOW alone: fine for sessions
+            # shorter than a week, which all of these are
+            clock[itow] = (clkb, clkd, tacc)
+    return rawx, timegps, clock
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv:
+        sys.exit(__doc__)
+    path = argv[0]
+    out = argv[argv.index("--csv") + 1] if "--csv" in argv else None
+
+    rawx, timegps, clock = collect(open(path, "rb").read())
+    if not rawx or not timegps:
+        sys.exit(f"{path}: {len(rawx)} RXM-RAWX epochs, {len(timegps)} valid NAV-TIMEGPS -- need both")
+
+    rows, unmatched, resets = [], 0, 0
+    for rcv_ms, stat in rawx:
+        # The nav epoch's iTOW is the whole second nearest the measurement; the bias stays far
+        # inside +/-0.5 s because the receiver steps its time scale in whole milliseconds.
+        gps_ms = round(rcv_ms / 1000) * 1000
+        if gps_ms not in timegps:
+            unmatched += 1
+            continue
+        ftow, tacc = timegps[gps_ms]
+        bias_ns = (rcv_ms - gps_ms) * 1_000_000 - ftow
+        resets += bool(stat & 0x02)
+        clk = clock.get(gps_ms % WEEK_MS)
+        rows.append((rcv_ms, bias_ns, tacc, clk))
+
+    print(f"{path}: {len(rawx)} RAWX epochs, {len(rows)} with a matching NAV-TIMEGPS "
+          f"({unmatched} without), {resets} clock resets flagged")
+    bias = [r[1] for r in rows]
+    print(f"  receiver clock bias {bias[0]/1e3:+.3f} .. {bias[-1]/1e3:+.3f} us")
+
+    with_clock = [(b, c[0]) for _, b, _, c in rows if c]
+    if with_clock:
+        for sign in (+1, -1):
+            d = sorted(b - sign * c for b, c in with_clock)
+            print(f"  NAV-CLOCK clkB, sign {sign:+d}: bias - clkB median {d[len(d)//2]:+.1f} ns "
+                  f"over {len(d)} epochs")
+    else:
+        print("  no NAV-CLOCK in this log; bias_ns comes from RAWX + NAV-TIMEGPS alone")
+
+    if out:
+        with open(out, "w") as f:
+            f.write("week,rcv_tow_s,bias_ns,tacc_ns,clkb_ns,clkd_ns_s,clk_tacc_ns\n")
+            for rcv_ms, bias_ns, tacc, clk in rows:
+                week, tow_ms = divmod(rcv_ms, WEEK_MS)
+                tail = f"{clk[0]},{clk[1]},{clk[2]}" if clk else ",,"
+                f.write(f"{week},{tow_ms // 1000}.{tow_ms % 1000:03d},{bias_ns},{tacc},{tail}\n")
+        print(f"wrote {out} ({len(rows)} rows)")
+
+
+if __name__ == "__main__":
+    main()

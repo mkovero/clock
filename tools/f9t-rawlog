@@ -103,6 +103,12 @@ cmd_start() {
 	# against RAWX's ~800 per epoch, and because a session logged without it cannot be used
 	# for time transfer afterwards - the tie cannot be reconstructed later.
 	setkey CFG-MSGOUT-UBX_TIM_TP_UART1 1 1 && echo "  TIM-TP on"
+	# NAV-CLOCK is the receiver's own clock-bias estimate, the other half of the tie: the pulse is
+	# placed by that estimate, PPP measures the true bias, and the difference is the pulse's error
+	# (docs/pulse-to-gps-tie.md). RAWX + NAV-TIMEGPS already give the same quantity and are what
+	# ubx-rxclock uses by default; NAV-CLOCK is logged as an independent cross-check and for clkD
+	# and tAcc. 28 bytes a second.
+	setkey CFG-MSGOUT-UBX_NAV_CLOCK_UART1 1 1 && echo "  NAV-CLOCK on"
 
 	{
 		echo "started=$(date -Is)"
@@ -170,6 +176,14 @@ elif timtp:
     print(f"TIM-TP    {timtp} records -- GAPPY against {rawx} RAWX epochs; time transfer will have holes")
 else:
     print("TIM-TP    none -- this session CANNOT be used for time transfer")
+# The receiver's own clock estimate: NAV-TIMEGPS with RAWX is enough (ubx-rxclock), NAV-CLOCK
+# is the cross-check. Without either, PPS - GPS cannot be formed from this session.
+timegps, navclock = c.get((0x01, 0x20), 0), c.get((0x01, 0x22), 0)
+if navclock and rawx and navclock >= 0.9 * rawx:
+    print(f"NAV-CLOCK {navclock} records (receiver clock estimate present)")
+else:
+    print(f"NAV-CLOCK {navclock} records -- {'falling back on' if timegps else 'and no'} "
+          f"NAV-TIMEGPS ({timegps}) for the receiver clock estimate")
 if rawx and rawx < 6*3600:
     print(f"          PPP wants 6 h or more; {(6*3600-rawx)/3600:.1f} h to go")
 PY
@@ -180,6 +194,7 @@ cmd_stop() {
 	setkey CFG-MSGOUT-UBX_RXM_RAWX_UART1 0 1 && echo "  RXM-RAWX off"
 	setkey CFG-MSGOUT-UBX_RXM_SFRBX_UART1 0 1 && echo "  RXM-SFRBX off"
 	setkey CFG-MSGOUT-UBX_TIM_TP_UART1 0 1 && echo "  TIM-TP off"
+	setkey CFG-MSGOUT-UBX_NAV_CLOCK_UART1 0 1 && echo "  NAV-CLOCK off"
 	if [ -f "$META" ]; then
 		# shellcheck disable=SC1090
 		. "$META"
@@ -231,6 +246,10 @@ cmd_watchdog() {
 	if [ "$(getkey CFG-MSGOUT-UBX_TIM_TP_UART1)" != "1" ]; then
 		echo "$stamp watchdog: TIM-TP disabled on the receiver, re-enabling"
 		setkey CFG-MSGOUT-UBX_TIM_TP_UART1 1 1
+	fi
+	if [ "$(getkey CFG-MSGOUT-UBX_NAV_CLOCK_UART1)" != "1" ]; then
+		echo "$stamp watchdog: NAV-CLOCK disabled on the receiver, re-enabling"
+		setkey CFG-MSGOUT-UBX_NAV_CLOCK_UART1 1 1
 	fi
 }
 
