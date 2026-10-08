@@ -227,8 +227,15 @@ or only the phase-capable ones. Measured directly:
 PPP clock                          epochs   PPS − GPS          CSRS clock − this clock
 RTKLIB GPS,     after 6 h          148      +0.7 ns sd 3.0     +20.6 ns
 RTKLIB GPS+GAL, after 6 h          514      +2.2 ns sd 6.0     +21.5 ns
+RTKLIB GPS, C/N0 >= 35, after 6 h  234      +5.0 ns sd 4.0     +24.7 ns
+RTKLIB GPS+GAL, C/N0 >= 35, 6 h+   1537     +2.8 ns sd 4.6     +22.0 ns
 CSRS 10-03 rapid                   3009     −17.5 ns sd 9.2    —
 ```
+
+Across the four RTKLIB variants the tie is **about +3 ± 2 ns**. The spread comes from processing
+choices, not from noise. The SNR-filtered GPS+Galileo run is the most complete: filtering out the
+shadowed satellites lets RTKLIB solve 1856 epochs instead of 585, and its position sits within
+0.3 m of the five-run mean.
 
 The RTKLIB tie is the one to believe, with four caveats. It covers only 176 and 585 of 3011
 epochs, because RTKLIB needs dual-frequency phase and this sky often leaves too few satellites. It
@@ -240,7 +247,8 @@ pulse.
 **One trap, recorded so it is not hit again.** RTKLIB 2.4.3 b34 reads the SP3 satellite count from
 two columns (`str2num(buff,4,2)` in `preceph.c`), so a modern multi-GNSS file's `115` becomes `11`,
 and most satellites report `prec ephem outage`. A one-character fix (`str2num(buff,3,3)`) was
-applied to a scratch copy for this work. `~/ppp/RTKLIB` on ai is unpatched.
+applied to `~/ppp/RTKLIB` on ai on 2026-10-08 (uncommitted in that checkout), and `rnx2rtkp`
+builds without the Fortran IERS library via `make LDLIBS="-lm -lrt"`.
 
 ## How this got past review
 
@@ -266,12 +274,15 @@ assumption is not a self-check.
    aika**, and it takes effect from the next session.
 4. Still open: settling qErr's sign from u-blox's interface description rather than from our own
    regression (`tools/ubx-timtp`). At ±4 ns it moves the mean by under 0.2 ns, so it is not urgent.
-5. The 10-03 position question is answered above: CSRS 10-03 was 8.5 m west, from shadowed code
-   acting on a weak east axis. Two follow-ups. First, **the configured position is about 1.4 m
-   off** (0.9 m west, 1.1 m high), worth ~+2.7 ns in the pulse. Replacing it with the RTKLIB /
-   CSRS-final consensus is aika work and shifts the pulse, so it waits for a go. Second, future
-   CSRS submissions from this station should be GPS-only or SNR-filtered, and cross-checked
-   against RTKLIB with ESA finals before their clock is used.
+5. The 10-03 position question is answered above. Follow-ups:
+   - **The configured position** was about 1.4 m off (0.94 m west, 1.06 m high), worth ~+2.7 ns
+     in the pulse. The five-run RTKLIB mean is written into `clock-private/f9t-ppp-position.txt`
+     and `f9t-known-good.txt`. **Applying it to the receiver is pending a go and a time window**,
+     because it moves the pulse.
+   - **CSRS submissions** go through `tools/rinex-filter` first. For 10-03,
+     `aika-20261004-0237-GE35.obs.gz` (GPS+Galileo, C/N0 ≥ 35) and `-G.obs.gz` (GPS only) are in
+     `~/ppp/2026-10-03/rinex/` on ai, ready to submit. Cross-check any CSRS position against
+     RTKLIB with ESA finals before using its clock.
 6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply
    the comparison is good to nanoseconds.
 

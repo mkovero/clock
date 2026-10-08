@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""rinex-filter -- drop constellations and shadowed satellites from a RINEX 3 observation file.
+
+    rinex-filter in.obs out.obs[.gz] [--systems G] [--min-snr 35]
+
+Why this exists: this station's usable sky is a 190-330 deg wedge, which leaves the east
+coordinate weak and coupled to height and troposphere. Satellites in the shadow still give
+pseudoranges, diffracted, at 14-25 dB-Hz and usually without phase, and on 2026-10-03 they
+pulled the CSRS-PPP position 8.5 m west and its clock ~21 ns (docs/pulse-to-gps-tie.md). CSRS
+also takes Galileo as E1-only code here, with 25-30 m RMS residuals. So a submission should be
+filtered first:
+
+    --systems G     keep only these constellations (letters, e.g. G or GE)
+    --min-snr 35    drop a satellite's whole record for the epoch if its first S (C/N0)
+                    observable is below this, or missing
+
+The header is kept, except that SYS / # / OBS TYPES and SYS / PHASE SHIFT lines for dropped
+systems are removed, and so is APPROX POSITION XYZ when --keep-approx is not given. That position
+comes from the receiver's own fixed position and is not needed. Event records (epoch flag > 1)
+pass through unchanged.
+"""
+
+import argparse
+import gzip
+import sys
+
+
+def opener(path, mode):
+    return gzip.open(path, mode + "t") if path.endswith(".gz") else open(path, mode)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("src")
+    p.add_argument("dst")
+    p.add_argument("--systems", default="G", help="constellation letters to keep (default G)")
+    p.add_argument("--min-snr", type=float, default=0.0, help="dB-Hz; 0 disables the SNR filter")
+    p.add_argument("--keep-approx", action="store_true", help="keep APPROX POSITION XYZ")
+    a = p.parse_args()
+    keep = set(a.systems.upper())
+
+    with opener(a.src, "r") as fin, opener(a.dst, "w") as fout:
+        # header: learn each system's observable list, drop lines for systems not kept
+        obs_types, last_sys = {}, None
+        for line in fin:
+            label = line[60:].strip()
+            if label == "SYS / # / OBS TYPES":
+                if line[0] != " ":
+                    last_sys = line[0]
+                    obs_types[last_sys] = []
+                obs_types[last_sys] += line[7:60].split()
+                if last_sys not in keep:
+                    continue
+            elif label == "SYS / PHASE SHIFT" and line[0] not in keep:
+                continue
+            elif label == "APPROX POSITION XYZ" and not a.keep_approx:
+                continue
+            fout.write(line)
+            if label == "END OF HEADER":
+                break
+
+        snr_col = {s: next((i for i, t in enumerate(types) if t.startswith("S")), None)
+                   for s, types in obs_types.items()}
+        if a.min_snr and any(snr_col.get(s) is None for s in keep if s in obs_types):
+            sys.exit("a kept system has no S observable; cannot apply --min-snr")
+
+        epochs = kept = dropped_sys = dropped_snr = 0
+        for line in fin:
+            if not line.startswith(">"):
+                sys.exit(f"expected an epoch record, got: {line[:40]!r}")
+            flag, nsat = int(line[31]), int(line[32:35])
+            records = [next(fin) for _ in range(nsat)]
+            if flag > 1:                       # event: header lines follow, copy verbatim
+                fout.write(line)
+                fout.writelines(records)
+                continue
+            epochs += 1
+            out = []
+            for rec in records:
+                s = rec[0]
+                if s not in keep:
+                    dropped_sys += 1
+                    continue
+                if a.min_snr:
+                    i = snr_col[s]
+                    field = rec[3 + 16 * i:3 + 16 * i + 14].strip()
+                    if not field or float(field) < a.min_snr:
+                        dropped_snr += 1
+                        continue
+                out.append(rec)
+            if not out:                        # nothing left: drop the epoch, not write an empty one
+                continue
+            kept += len(out)
+            fout.write(f"{line[:32]}{len(out):3d}{line[35:]}")
+            fout.writelines(out)
+
+    print(f"{a.src} -> {a.dst}: {epochs} epochs, {kept} satellite records kept, "
+          f"{dropped_sys} dropped by system, {dropped_snr} by SNR < {a.min_snr:g}")
+
+
+if __name__ == "__main__":
+    main()
