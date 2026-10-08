@@ -24,8 +24,9 @@ The TCXO's offset and drift are in both biases and cancel; nothing is fitted. Th
 this before 2026-10-08 tried to tie TIM-TP straight to the PPP clock and guess the sign from
 which one cancelled the drift; neither sign could, and docs/pulse-to-gps-tie.md has why.
 
-On the 2026-10-03 session (rapid products, 3009 epochs) this gives PPS - GPS = -17.5 ns,
-sd 9.2 ns, drift -10.8 ns/day, before the uncalibrated antenna/LNA/cable delay.
+The PPP clock is only as good as the PPP position, and the tie inherits any error in it. On
+2026-10-03 the CSRS solution was 8.5 m west and its clock ~21 ns off, so this printed -17.5 ns.
+Against an RTKLIB/ESA-final clock with a cross-checked position it is +0.7 ns, sd 3.0 ns.
 
 Usage:
     ppp-vs-utcmike --mike mike2609.gpi --ppp full_output.pos

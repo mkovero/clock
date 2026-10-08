@@ -539,10 +539,11 @@ Consequences:
   `tools/ubx-rxclock` gets the receiver's bias from RAWX `rcvTow` and NAV-TIMEGPS `iTOW + fTOW`
   (and NAV-CLOCK when logged), and `tools/ppp-vs-utcmike --timtp --clk --rxclock` subtracts. The
   TCXO cancels, nothing is fitted, and a wrong sign shows up as ~465 µs instead of tens of ns, so
-  the tool refuses it. On the 10-03 session: **PPS − GPS = −17.5 ns, sd 9.2 ns,
-  −10.8 ns/day**. That excludes the LNA delay, and it includes a ~9 ns term from a 7.8 m
-  disagreement between the receiver's configured position and that session's PPP position, which
-  is now the open question.
+  the tool refuses it. On the 10-03 session, against an RTKLIB PPP clock with ESA finals:
+  **PPS − GPS = +0.7 ns, sd 3.0 ns** (GPS only), before the LNA delay. Against the CSRS clock it
+  read −17.5 ns. That run had put the antenna 8.5 m west, because shadowed code acts on an east
+  axis this sky leaves weak, and the position error leaked ~21 ns into its clock. A PPP clock from
+  this station is only usable once its position has been cross-checked.
 
   TIM-TP describes the wired output, and the GGTO term has been removed by moving to the GPS grid.
   A session needs RAWX, NAV-TIMEGPS and `UBX-TIM-TP` logged together (`f9t-rawlog` also enables

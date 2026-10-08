@@ -2,13 +2,16 @@
 
 **Status: resolved 2026-10-08, the same day it was raised.** The tie is now
 `PPS − GPS = (receiver's clock bias − PPP's clock bias) − qErr`, implemented in
-`tools/ubx-rxclock` and `tools/ppp-vs-utcmike --rxclock`. On the 10-03 session it gives
-**PPS − GPS = −17.5 ns, sd 9.2 ns, drift −10.8 ns/day over 3009 epochs**, before the uncalibrated
-antenna/LNA/cable delay. **New blocker:** that PPP solution puts the antenna 7.8 m from the
-receiver's configured position, which accounts for ~9 ns of the offset. Which position is right is
-[open](#what-175-ns-does-and-does-not-include). The first half of this note is the diagnosis as written that morning.
-[The −qErr reading](#the-simpler-reading-and-why-it-was-wrong) that it proposed was itself wrong,
-and [the fix](#the-tie-that-works) follows it.
+`tools/ubx-rxclock` and `tools/ppp-vs-utcmike --rxclock`. On the 10-03 session, against an
+RTKLIB PPP clock with ESA finals, it gives **PPS − GPS = +0.7 ns, sd 3.0 ns (GPS only) and
++2.2 ns, sd 6.0 ns (GPS+Galileo)**, before the uncalibrated antenna/LNA/cable delay.
+
+The first number quoted that day was **−17.5 ns, against the CSRS-PPP clock, and it was wrong**.
+CSRS put the 10-03 antenna 8.5 m west of where its own data places it, and that error leaked
+about +21 ns into its clock ([why](#why-the-10-03-csrs-position-was-85-m-off)). The note runs in
+the order things were found: the morning's diagnosis, the
+[−qErr reading](#the-simpler-reading-and-why-it-was-wrong) it proposed, which was also wrong, then
+[the tie that works](#the-tie-that-works) and the position problem that tie exposed.
 
 ## What this is blocking
 
@@ -128,52 +131,116 @@ and a deliberately negated `.clk` is refused with exit 1. This is unlike the old
 check, which could not tell the two apart.
 
 ```
-receiver bias − PPP bias    3009 epochs   mean −17.5 ns   sd 8.9 ns   −10.8 ns/day
+receiver − CSRS-PPP bias    3009 epochs   mean −17.5 ns   sd 8.9 ns   −10.8 ns/day
   change over   30 s  sd 5.2 ns     300 s  sd 7.3 ns     1800 s  sd 8.2 ns
 + (−qErr)                                  mean −17.5 ns   sd 9.2 ns
 NAV-TIMEGPS tAcc (receiver's own claim)    median 1 ns
 ```
 
-So the receiver puts its pulse **about 17.5 ns early against GPS time as this PPP solution
-realises it**. It wanders by ~9 ns over a day while telling us its time is good to 1 ns. About
-half the offset may be position rather than timing; see the last bullet below.
+Against the CSRS clock, then, the pulse looked **17.5 ns early**, wandering ~9 ns over a day
+while the receiver reported 1 ns. Neither figure survives a correct PPP position: against RTKLIB
+the same tie gives +0.7 ns at sd 3.0 ns. See [below](#why-the-10-03-csrs-position-was-85-m-off).
 
 One trap cost an hour and is recorded so it does not cost another: a double holding seconds since
 1980 resolves only ~238 ns. Computed that way, the same data gave sd 97 ns with a triangular step
 histogram, which looks exactly like a noisy receiver. `ubx-rxclock` and the tie work in integer
 ms and ns throughout.
 
-### What −17.5 ns does and does not include
+### What the tie does and does not include
 
 - **Included, and cancelling:** the real antenna/LNA/cable delay *d* enters both biases equally,
   because both solutions see the same delayed signals. That is why the tie is clean.
 - **Not removed:** the pulse is advanced by `CFG-TP-ANT_CABLEDELAY` (40 ns) to compensate *d*. So
-  the full statement is `PPS − GPS = −17.5 ns + (d − 40 ns) + δ`. Here *d* is the true antenna, LNA
+  the full statement is `PPS − GPS = (tie) + (d − 40 ns) + δ`. Here *d* is the true antenna, LNA
   and cable delay and δ is any receiver-side code bias between the F9T's signal set and PPP's.
   *d* − 40 ns is the uncalibrated LNA group delay, 10–30 ns in
   [timing.md](timing.md#bias-and-error-budget). It is still the dominant term, and it is
-  comparable in size to the −17.5 ns itself.
+  larger than the tie itself.
 - **Assumed, not yet shown:** that the pulse is placed using the same estimate NAV-TIMEGPS reports.
   `f9t-rawlog` now logs NAV-CLOCK too. Its `clkB` is a second view of the same estimate, and
   `ubx-rxclock` prints the two side by side when both are present. Neither can show from inside the
   receiver which estimate the TP hardware uses; only an external comparison can.
-- **Position, and this is the new blocker.** In TMODE fixed the receiver computes its clock
-  against its configured position. That position is the 09-12 rapid PPP solution. PPP computes its
-  clock against its own position, and the 10-03 solution puts the antenna **7.8 m** from the
-  configured one (ENU +7.60 / −0.88 / −1.48 m). That is 20× its own 0.36 m 95 % sigma. A position
-  error leaks into a clock estimate as the mean, over the satellites in use, of each line of sight
-  projected onto the error. Computed from NAV-SAT (19 satellites used, equal weights), the 7.8 m
-  predicts **−9.3 ns** of the −17.5 ns. The time-varying part is small (sd 2.2 ns, r = +0.11
-  against the observed series), so most of the 9 ns wander is something else.
+- **Position.** In TMODE fixed the receiver computes its clock against its configured position,
+  and PPP computes its clock against its own. A position error leaks into a clock estimate as the
+  mean, over the satellites in use, of each line of sight projected onto the error. Both errors
+  therefore enter the tie, and the next section measures both.
 
-  The PPP solutions disagree with each other more than with anything physical. 09-12 final and
-  09-12 rapid agree to 1.3 m. 10-03 rapid is 8.6–8.9 m from both, mostly east. Nothing records the
-  antenna moving after 2026-09-11 ([hardware.md](hardware.md)). So either 10-03's position is
-  wrong, and its clock with it, or 09-12's was and the receiver has run on a bad position since.
-  Until that is settled, **the −17.5 ns carries a ~9 ns position term of unknown sign**. The
-  differences above were computed from `clock-private/` without printing coordinates. Two
-  unexplored leads: 10-03's AR tags sit up to 9.4 ms off GPS time (receiver time), and the 09-12
-  final used only 410 of 2769 epochs.
+## Why the 10-03 CSRS position was 8.5 m off
+
+The antenna has not moved. Independent RTKLIB 2.4.3 static PPP with ESA final orbits and clocks
+(`ESA0OPSFIN`), IGS20 ANTEX, ionosphere-free, estimated troposphere with gradients and a 15° mask
+agrees with itself across both sessions and both constellation sets:
+
+```
+RTKLIB run          - CSRS 09-12 final (E / N / U, m)    - CSRS 10-03 rapid (E, m)
+09-12 GPS           +0.17 / -0.23 / +0.05                 +8.74
+09-12 GPS+GAL       -0.01 / +0.24 / -0.39                 +8.56
+10-03 GPS           -0.17 / -0.08 / +0.03                 +8.40
+10-03 GPS+GAL       -0.27 / +0.09 / -0.63                 +8.29
+```
+
+All four agree within 0.45 m, and with CSRS's 09-12 final. **CSRS 10-03 is 8.5 m west and 2.5 m
+high** of the truth they define. The configured position (CSRS 09-12 rapid) is 0.9 m west and
+1.1 m high.
+
+**Why one PPP run can be pulled that far: the sky makes east the weak axis.** The usable sky is a
+wedge from 190° to 330° azimuth ([hardware.md](hardware.md#what-the-antenna-can-actually-see)).
+With every phase-capable satellite to the west, moving the antenna east lengthens all their ranges
+by about the same amount, which looks like a clock change. From NAV-SAT geometry, with the clock
+eliminated per epoch and only C/N0 ≥ 35 satellites:
+
+```
+sigma ratio E : N : U : trop     open sky 0.67 : 1 : 5.1 : 1.8     this sky 2.62 : 1 : 7.0 : 2.0
+correlation                      E-U -0.56   E-trop +0.44   U-trop -0.95
+```
+
+East goes from the best-determined horizontal axis to 2.6× worse than north, and is coupled to
+height and wet delay. A bias anywhere in the measurements therefore comes out mostly in east and
+up, which is exactly the shape of the 10-03 error.
+
+**What supplies the bias: code from the shadowed sky.** East of the 185° building edge the signals
+are diffracted, 14–25 dB-Hz with no phase. They still give pseudoranges, and those are biased.
+CSRS shows it in its residuals: Galileo, which it takes as **E1 only** (C1C/L1C, E5b dropped), has
+code RMS **25–30 m** and phase residual exactly 0.000 in both sessions. GPS code is 3–4 m, against
+1.8 m in the GPS-only 09-12 final. Single-point solutions with RTKLIB isolate the effect:
+
+```
+SPP median E vs truth (m)      all satellites     C/N0 >= 35 only
+09-12  GPS+GAL                 -8.86              -0.73
+10-03  GPS+GAL                 -4.63              -1.22
+09-12  GPS                     -8.85              -0.51
+10-03  GPS                     -7.11              -1.23
+```
+
+The shadowed code pulls the solution 4–9 m **west**, the same direction as CSRS 10-03's error.
+Masking it brings every case to about 1 m. Why CSRS was pulled further on 10-03 than on 09-12 is
+not established. The satellite tracks through the shadow differ between the sessions, and so does
+how much weak Galileo E1 code got in. The fix is the same either way: do not let shadowed code
+drive this station's position.
+
+**What it did to the tie.** Projecting each position error through the 10-03 geometry predicts
++2.7 ns of leak into the receiver's clock (configured position, satellites it used). It predicts
++12.5 to +22.7 ns into CSRS's clock, depending on whether the solution leans on all used satellites
+or only the phase-capable ones. Measured directly:
+
+```
+PPP clock                          epochs   PPS − GPS          CSRS clock − this clock
+RTKLIB GPS,     after 6 h          148      +0.7 ns sd 3.0     +20.6 ns
+RTKLIB GPS+GAL, after 6 h          514      +2.2 ns sd 6.0     +21.5 ns
+CSRS 10-03 rapid                   3009     −17.5 ns sd 9.2    —
+```
+
+The RTKLIB tie is the one to believe, with four caveats. It covers only 176 and 585 of 3011
+epochs, because RTKLIB needs dual-frequency phase and this sky often leaves too few satellites. It
+applies no C1C/C2L code-bias corrections against ESA's C1W/C2W clock datum, which is worth a few ns
+of offset and some of the scatter. The two product sets' time scales may differ at the ns level.
+And it still includes the configured position's own ~+2.7 ns leak, which is genuinely in the
+pulse.
+
+**One trap, recorded so it is not hit again.** RTKLIB 2.4.3 b34 reads the SP3 satellite count from
+two columns (`str2num(buff,4,2)` in `preceph.c`), so a modern multi-GNSS file's `115` becomes `11`,
+and most satellites report `prec ephem outage`. A one-character fix (`str2num(buff,3,3)`) was
+applied to a scratch copy for this work. `~/ppp/RTKLIB` on ai is unpatched.
 
 ## How this got past review
 
@@ -199,11 +266,14 @@ assumption is not a self-check.
    aika**, and it takes effect from the next session.
 4. Still open: settling qErr's sign from u-blox's interface description rather than from our own
    regression (`tools/ubx-timtp`). At ±4 ns it moves the mean by under 0.2 ns, so it is not urgent.
-5. Open, and now first: why the 10-03 and 09-12 PPP positions differ by ~8 m, and so which
-   position the receiver should be running on. Changing the configured position is aika work and
-   shifts the pulse by nanoseconds, so it waits for a go.
-6. Still open, and the dominant term once 5 is settled: the LNA delay. Do not let a tidy −17.5 ns imply the comparison is
-   good to nanoseconds.
+5. The 10-03 position question is answered above: CSRS 10-03 was 8.5 m west, from shadowed code
+   acting on a weak east axis. Two follow-ups. First, **the configured position is about 1.4 m
+   off** (0.9 m west, 1.1 m high), worth ~+2.7 ns in the pulse. Replacing it with the RTKLIB /
+   CSRS-final consensus is aika work and shifts the pulse, so it waits for a go. Second, future
+   CSRS submissions from this station should be GPS-only or SNR-filtered, and cross-checked
+   against RTKLIB with ESA finals before their clock is used.
+6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply
+   the comparison is good to nanoseconds.
 
 ## Do not
 
@@ -212,4 +282,6 @@ assumption is not a self-check.
 - Do not read the ±0.0626 ppm residual of the old tool as a receiver or rubidium fault. It was the
   TCXO entering a calculation that did not subtract it.
 - Do not take `−qErr` alone as PPS − GPS. It is the pulse against the receiver's own clock
-  estimate, and that estimate was 17.5 ns off on 10-03.
+  estimate.
+- Do not tie against a PPP clock whose position has not been cross-checked. On 10-03, an 8.5 m
+  position error turned +0.7 ns into −17.5 ns.
