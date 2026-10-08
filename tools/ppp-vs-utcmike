@@ -134,6 +134,15 @@ def drift_ppm(points):
 def pps_minus_gps(timtp, clk):
     """Tie the pulse to GPS time: PPS - GPS = (PPS - tow) - (receiver clock - GPS time).
 
+    **DISPUTED as of 2026-10-08 — read docs/pulse-to-gps-tie.md before trusting this.** Two
+    defects, found with a good multi-GNSS rapid solution (3011 clock records, so not a data
+    problem). First, the scoring below takes abs(), so two series differing only in one term's sign
+    always tie and the check can never choose: measured -0.062556 and +0.062556 ppm. Second, and
+    worse, the premise looks wrong — PPS - tow carries no drift (qErr is bounded at -4.05..+3.81 ns,
+    sd 2.26 ns), so no sign can cancel the clock's drift, and the likely truth is that
+    PPS - GPS = -qErr with the receiver clock not entering at all. The tool exits rather than
+    quoting a number, which is correct; it has deliberately been left that way.
+
     **The sign convention is checked against the data, not asserted.** The receiver clock is a
     free-running TCXO drifting by ~0.46 ppm, which is 40 ms a day, while a steered pulse sits
     within nanoseconds of GPS time. So of the two possible signs, exactly one cancels that drift
