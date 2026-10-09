@@ -270,15 +270,16 @@ assumption is not a self-check.
    needs `--rxclock`, and the tie is the subtraction above, with the 1 µs sanity refusal. `--clk`
    stays.
 3. `tools/f9t-rawlog`: enables, disables and watchdogs `CFG-MSGOUT-UBX_NAV_CLOCK_UART1`
-   (28 bytes/s, nothing against the UART budget), and `status` reports it. **Not yet deployed to
-   aika**, and it takes effect from the next session.
+   (28 bytes/s, nothing against the UART budget), and `status` reports it. Deployed to aika
+   2026-10-09; it takes effect from the next session.
 4. Still open: settling qErr's sign from u-blox's interface description rather than from our own
    regression (`tools/ubx-timtp`). At ±4 ns it moves the mean by under 0.2 ns, so it is not urgent.
 5. The 10-03 position question is answered above. Follow-ups:
    - **The configured position** was about 1.4 m off (0.94 m west, 1.06 m high), worth ~+2.7 ns
      in the pulse. The five-run RTKLIB mean is written into `clock-private/f9t-ppp-position.txt`
-     and `f9t-known-good.txt`. **Applying it to the receiver is pending a go and a time window**,
-     because it moves the pulse.
+     and `f9t-known-good.txt`. It went onto the receiver
+     2026-10-09 00:17 UTC (RAM, BBR and flash; 64/64 known-good keys match), and PPS2 stayed
+     selected through it. Sessions before then used the old position.
    - **CSRS submissions** go through `tools/rinex-filter` first. For 10-03,
      `aika-20261004-0237-GE35.obs.gz` (GPS+Galileo, C/N0 ≥ 35) and `-G.obs.gz` (GPS only) are in
      `~/ppp/2026-10-03/rinex/` on ai, ready to submit. Cross-check any CSRS position against
