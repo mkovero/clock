@@ -171,8 +171,11 @@ far less phase noise and is the right input.
   change the OE register is read back (`OE=0xEF` means on).
 - **BIT is indication only.** CLK4 follows the Si5351, not the rubidium lock, so the CM4
   boots during the AR-40A's 5-minute warm-up and chrony re-converges afterwards.
-- **Counters:** `i2cErr`, `dataErr`, `revidErr`, `oeErr`. `dataErr` rises slowly in
-  steady state. Those rejections are safe, but the rate has not been quantified.
+- **Counters:** `i2cErr`, `dataErr`, `revidErr`, `oeErr`. Since the 5 V cycle
+  on 2026-10-06 `dataErr` runs at ~2 % of polls (status lines come every 8th poll, so
+  divide by 8× the line count). All of it is `liveErr`: reg 0 bit 7 (`SYS_INIT`) read as 1
+  while PLLA is locked. That bit does not gate, and a rejected poll holds the output state.
+  On the boot before, the rate was 0.0014 %.
 - **Status link:** Serial1 at 115200 to CM4 `/dev/ttyAMA5` (`dtoverlay=uart5`). Teensy
   pin 1 → header pin 33 (GPIO13), pin 0 ← header pin 32 (GPIO12), GND to header pin 34.
   It carries the same text as USB every ~2 s and on each BIT change. RX is not used yet.
