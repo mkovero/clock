@@ -282,8 +282,25 @@ assumption is not a self-check.
      selected through it. Sessions before then used the old position.
    - **CSRS submissions** go through `tools/rinex-filter` first. For 10-03,
      `aika-20261004-0237-GE35.obs.gz` (GPS+Galileo, C/N0 ≥ 35) and `-G.obs.gz` (GPS only) are in
-     `~/ppp/2026-10-03/rinex/` on ai, ready to submit. Cross-check any CSRS position against
-     RTKLIB with ESA finals before using its clock.
+     `~/ppp/2026-10-03/rinex/` on ai. Cross-check any CSRS position against RTKLIB with ESA
+     finals before using its clock.
+   - **The filtered submissions worked (2026-10-19, CSRS rapid products `EMR0MGBRAP`; finals
+     not yet ingested).** Against the RTKLIB consensus position now on the receiver:
+
+     | Submission | Epochs | dE | dN | dU | PPS − GPS |
+     |---|---|---|---|---|---|
+     | GE35 (G+E, C/N0 ≥ 35) | 1974/3019 | −0.01 m | −0.08 m | +0.34 m | **−0.3 ns**, sd 4.6, drift −2.8 ns/day |
+     | G (GPS only, all C/N0) | 383/3003 | +0.23 m | +0.05 m | +0.22 m | +4.6 ns, sd 10.7, drift −43 ns/day |
+     | *unfiltered, 10-08 (for reference)* | | *8.5 m west* | | *+2.5 m* | *−17.5 ns* |
+
+     GE35 agrees with RTKLIB's +3 ± 2 ns, so the 8.5 m was the shadowed code, and CSRS is usable
+     here when given filtered input. CSRS still takes Galileo as E1 only (`OBS E C1C L1C`). The
+     GPS-only run keeps the same 383 epochs as the 10-04 ultra-rapid run did, so that count is a
+     property of the GPS-only data under CSRS, not of the products; it is too thin to use. No
+     ambiguities fixed in either (`IAR 0.00%`). Two costs of `rinex-filter` dropping APPROX
+     POSITION: CSRS applies no ocean loading without it, and starts from a code-only position.
+     The +0.34 m up is inside the 95 % sigma (0.17–0.21 m per axis) plus the missing APC and
+     ocean loading, but worth watching. Resubmit GE35 once CSRS serves finals.
 6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply
    the comparison is good to nanoseconds.
 
