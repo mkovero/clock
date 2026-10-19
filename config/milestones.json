@@ -35,6 +35,10 @@
     "done": true
   },
   {
+    "at": "2026-10-20T23:50:00Z",
+    "what": "Stop the 24 h RAWX session (started 10-19 23:47Z, first on the 10-09 position, with NAV-CLOCK): f9t-rawlog stop, then unmask the dashboard cron (#MASKED-rawlog-20261019 in /etc/cron.d/aika-clock-dashboard), copy rawx.ubx to ai, filter GE35 and submit"
+  },
+  {
     "at": "2026-10-23T12:00:00Z",
     "what": "CSRS finals for 2026-10-03: submit ~/ppp/2026-10-03/rinex/aika-20261004-0237-GE35a.obs.gz (ITRF, static). Use it only if the products line says EMR0MGBFIN; still RAP means wait a few days and retry"
   },
