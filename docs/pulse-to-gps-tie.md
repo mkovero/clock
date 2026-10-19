@@ -297,8 +297,9 @@ assumption is not a self-check.
      here when given filtered input. CSRS still takes Galileo as E1 only (`OBS E C1C L1C`). The
      GPS-only run keeps the same 383 epochs as the 10-04 ultra-rapid run did, so that count is a
      property of the GPS-only data under CSRS, not of the products; it is too thin to use. No
-     ambiguities fixed in either (`IAR 0.00%`). Two costs of `rinex-filter` dropping APPROX
-     POSITION: CSRS applies no ocean loading without it, and starts from a code-only position.
+     ambiguities fixed in either (`IAR 0.00%`). These runs had APPROX POSITION stripped, which
+     cost two things: CSRS applies no ocean loading without it, and starts from a code-only
+     position. `rinex-filter` now keeps it by default (`--drop-approx` to remove).
      The +0.34 m up is inside the 95 % sigma (0.17–0.21 m per axis) plus the missing APC and
      ocean loading, but worth watching. Resubmit GE35 once CSRS serves finals.
 6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply

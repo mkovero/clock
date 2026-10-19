@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rinex-filter -- drop constellations and shadowed satellites from a RINEX 3 observation file.
 
-    rinex-filter in.obs out.obs[.gz] [--systems G] [--min-snr 35]
+    rinex-filter in.obs out.obs[.gz] [--systems G] [--min-snr 35] [--drop-approx]
 
 Why this exists: this station's usable sky is a 190-330 deg wedge, which leaves the east
 coordinate weak and coupled to height and troposphere. Satellites in the shadow still give
@@ -15,9 +15,10 @@ filtered first:
                     observable is below this, or missing
 
 The header is kept, except that SYS / # / OBS TYPES and SYS / PHASE SHIFT lines for dropped
-systems are removed, and so is APPROX POSITION XYZ when --keep-approx is not given. That position
-comes from the receiver's own fixed position and is not needed. Event records (epoch flag > 1)
-pass through unchanged.
+systems are removed. APPROX POSITION XYZ is kept unless --drop-approx is given: CSRS-PPP needs it
+to apply ocean loading and otherwise starts from a code-only position (2026-10-19). It comes from
+the receiver's own fixed position, so drop it only for a file that leaves this machine for
+somewhere the coordinates should not go. Event records (epoch flag > 1) pass through unchanged.
 """
 
 import argparse
@@ -35,7 +36,7 @@ def main():
     p.add_argument("dst")
     p.add_argument("--systems", default="G", help="constellation letters to keep (default G)")
     p.add_argument("--min-snr", type=float, default=0.0, help="dB-Hz; 0 disables the SNR filter")
-    p.add_argument("--keep-approx", action="store_true", help="keep APPROX POSITION XYZ")
+    p.add_argument("--drop-approx", action="store_true", help="remove APPROX POSITION XYZ")
     a = p.parse_args()
     keep = set(a.systems.upper())
 
@@ -53,7 +54,7 @@ def main():
                     continue
             elif label == "SYS / PHASE SHIFT" and line[0] not in keep:
                 continue
-            elif label == "APPROX POSITION XYZ" and not a.keep_approx:
+            elif label == "APPROX POSITION XYZ" and a.drop_approx:
                 continue
             fout.write(line)
             if label == "END OF HEADER":

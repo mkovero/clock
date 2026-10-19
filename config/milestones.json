@@ -1,10 +1,45 @@
 [
-  {"at": "2026-10-04T00:42:00Z",
-   "what": "RAWX + TIM-TP session ends — f9t-rawlog stop, then f9t-ppp ~/f9t-rawlog/rawx.ubx"},
-  {"at": "2026-10-05T12:00:00Z",
-   "what": "CSRS-PPP rapid solution should be back — exercise the TIM-TP tie end to end"},
-  {"at": "2026-10-18T00:00:00Z",
-   "what": "CSRS-PPP final orbits/clocks available for 2026-10-03 — resubmit for the better solution"},
-  {"at": "2026-11-15T00:00:00Z",
-   "what": "BIPM should have published mike2610.gpi — run the UTC(MIKE) comparison"}
+  {
+    "at": "2026-10-04T00:42:00Z",
+    "done": true,
+    "what": "RAWX + TIM-TP session captured and submitted — 25.9 h, 90758 TIM-TP records"
+  },
+  {
+    "at": "2026-10-07T00:28:00Z",
+    "done": true,
+    "what": "Enclosure closed — boundary for every open/closed-case comparison. Block 0 jamInd 15/255, block 1 21/255 at the boundary"
+  },
+  {
+    "at": "2026-10-08T20:00:00Z",
+    "what": "Rapid PPP solution in: multi-GNSS, Galileo back, 3011/3020 epochs. Data is good; the tie tool premise is now the blocker (clock/docs/pulse-to-gps-tie.md)",
+    "done": true
+  },
+  {
+    "at": "2026-10-08T20:00:00Z",
+    "what": "Superseded: the tie now goes through the receiver’s own clock estimate (ubx-rxclock), so the towMS reference no longer decides it. qErr’s sign from the u-blox docs is still open but worth under 0.2 ns",
+    "done": true
+  },
+  {
+    "at": "2026-10-10T12:00:00Z",
+    "what": "RF site baselines re-derived for the closed case — gpsstat now 0:18 1:21 ±8; both blocks fell when the lid went on, so the interferer is outside the box",
+    "done": true
+  },
+  {
+    "at": "2026-10-16T18:00:00Z",
+    "what": "Si5351 dataErr re-checked: ~2 % of polls, steady since 10-07 and not thermal (the 21.9 % / 0.011 % figures divided by status lines, which come every 8th poll). All of it is liveErr, SYS_INIT read as 1 under lock: a non-gating bit, so no CLK4 risk. I²C still worth a look when the case is next open",
+    "done": true
+  },
+  {
+    "at": "2026-10-19T19:30:00Z",
+    "what": "CSRS resubmitted through rinex-filter: came back on rapid products (EMR0MGBRAP), not finals. GE35 lands 8 cm from the RTKLIB consensus and ties PPS-GPS at -0.3 ns, agreeing with RTKLIB (clock/docs/pulse-to-gps-tie.md)",
+    "done": true
+  },
+  {
+    "at": "2026-10-23T12:00:00Z",
+    "what": "CSRS finals for 2026-10-03: submit ~/ppp/2026-10-03/rinex/aika-20261004-0237-GE35a.obs.gz (ITRF, static). Use it only if the products line says EMR0MGBFIN; still RAP means wait a few days and retry"
+  },
+  {
+    "at": "2026-11-15T00:00:00Z",
+    "what": "BIPM should have published mike2610.gpi — run the UTC(MIKE) comparison"
+  }
 ]
