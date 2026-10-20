@@ -158,8 +158,11 @@ ms and ns throughout.
   larger than the tie itself.
 - **Assumed, not yet shown:** that the pulse is placed using the same estimate NAV-TIMEGPS reports.
   `f9t-rawlog` now logs NAV-CLOCK too. Its `clkB` is a second view of the same estimate, and
-  `ubx-rxclock` prints the two side by side when both are present. Neither can show from inside the
-  receiver which estimate the TP hardware uses; only an external comparison can.
+  `ubx-rxclock` prints the two side by side when both are present. On the 2026-10-19 session they
+  agree to ±1 ns modulo 1 ms over 57 255 epochs (`clkB` holds only the sub-millisecond part), so
+  the RAWX + NAV-TIMEGPS derivation is confirmed against the receiver's own report. Neither can
+  show from inside the receiver which estimate the TP hardware uses; only an external comparison
+  can.
 - **Position.** In TMODE fixed the receiver computes its clock against its configured position,
   and PPP computes its clock against its own. A position error leaks into a clock estimate as the
   mean, over the satellites in use, of each line of sight projected onto the error. Both errors

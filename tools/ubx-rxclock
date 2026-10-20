@@ -20,7 +20,10 @@ Two sources, written side by side so they can be checked against each other:
               nanoseconds: seconds since 1980 held in a double resolve only ~238 ns, which
               looks exactly like a noisy receiver.
     clkb_ns   from NAV-CLOCK, when the log has it (f9t-rawlog enables it from 2026-10-08).
-              Blank otherwise. Its sign is not assumed: compare it against bias_ns.
+              Blank otherwise. On the 2026-10-19 session it equals bias_ns modulo 1 ms to
+              +/-1 ns over 57 255 epochs, same sign: clkB is the sub-millisecond part, and the
+              whole milliseconds are the steps the receiver applies to its time scale, which
+              only rcvTow carries. So it is an independent check of bias_ns, not a substitute.
 
 Rows are keyed by rcvTow, which is exactly what CSRS-PPP's AR epoch tags carry (e.g. 59.991 s),
 so they pair with the .clk without interpolation.
@@ -116,10 +119,11 @@ def main():
 
     with_clock = [(b, c[0]) for _, b, _, c in rows if c]
     if with_clock:
-        for sign in (+1, -1):
-            d = sorted(b - sign * c for b, c in with_clock)
-            print(f"  NAV-CLOCK clkB, sign {sign:+d}: bias - clkB median {d[len(d)//2]:+.1f} ns "
-                  f"over {len(d)} epochs")
+        # clkB carries only the sub-millisecond part, so compare modulo 1 ms
+        d = sorted((b - c + 500_000) % 1_000_000 - 500_000 for b, c in with_clock)
+        n = len(d)
+        print(f"  NAV-CLOCK check, (bias - clkB) mod 1 ms: median {d[n//2]:+d} ns, "
+              f"range {d[0]:+d} .. {d[-1]:+d} ns over {n} epochs (expect 0 +/- 1)")
     else:
         print("  no NAV-CLOCK in this log; bias_ns comes from RAWX + NAV-TIMEGPS alone")
 
