@@ -36,11 +36,20 @@
   },
   {
     "at": "2026-10-20T23:50:00Z",
-    "what": "Stop the 24 h RAWX session (started 10-19 23:47Z, first on the 10-09 position, with NAV-CLOCK): f9t-rawlog stop, then unmask the dashboard cron (#MASKED-rawlog-20261019 in /etc/cron.d/aika-clock-dashboard), copy rawx.ubx to ai, filter GE35 and submit"
+    "what": "24 h RAWX session stopped on time: 86 605 epochs at 1 Hz, 2887/2887 RINEX epochs at 30 s (cron masking worked). NAV-CLOCK matches bias_ns to ±1 ns. Cron unmasked; log at ~/f9t-rawlog/rawx-20261019.ubx, RINEX on ai in ~/ppp/2026-10-19/rinex/",
+    "done": true
   },
   {
     "at": "2026-10-23T12:00:00Z",
     "what": "CSRS finals for 2026-10-03: submit ~/ppp/2026-10-03/rinex/aika-20261004-0237-GE35a.obs.gz (ITRF, static). Use it only if the products line says EMR0MGBFIN; still RAP means wait a few days and retry"
+  },
+  {
+    "at": "2026-10-23T12:00:00Z",
+    "what": "CSRS rapid for the 10-19 session: submit ~/ppp/2026-10-19/rinex/aika-20261020-2351-GE35.obs.gz (ITRF, static). Products line should say EMR0MGBRAP; first tie of the 10-09 position"
+  },
+  {
+    "at": "2026-11-05T12:00:00Z",
+    "what": "CSRS finals for the 10-19 session: resubmit aika-20261020-2351-GE35.obs.gz, use only if products say EMR0MGBFIN"
   },
   {
     "at": "2026-11-15T00:00:00Z",
