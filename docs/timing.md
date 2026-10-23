@@ -102,6 +102,7 @@ handles that through gpsd.
 
   ```
   [global]
+  clock_servo linreg
   leapfile /usr/share/zoneinfo/leap-seconds.list
   ts2phc.pin_index 0
   ts2phc.channel 0
@@ -118,6 +119,17 @@ handles that through gpsd.
   day into the persistent journal on the eMMC. The PHC's quality is measured instead by
   `tools/phc-pps-residual`, which the dashboard collector runs every 5 minutes; on demand,
   2026-10-23: sd 6.2 ns over 90 s, with 30 s windows ranging sd 6–8 ns and one at 21 ns.
+- **The PHC moves with CPU and eMMC load on aika.** Ten-minute runs read sd 14–16 ns, twice
+  the 30 s windows, because of +30 ns bumps every 5 minutes, each followed by a −15 ns
+  overshoot. They matched a monitoring job on ai that read the whole boot's journal over ssh
+  (~35 s of load at 16 days' uptime). With that job cut to a one-line read, 11 minutes read
+  **sd 8.3 ns**, p95 15 ns; the dashboard's SFTP publish still leaves ~20 ns blips. Anything
+  heavy on aika shows up in the PTP clock, so keep periodic jobs there light.
+- **`clock_servo linreg` since 2026-10-23 22:17Z**, on trial against the default PI. The
+  median 30 s window is the same on both (sd 8.6 ns PI, 9.4 ns linreg), so the per-second
+  noise is not the servo's; the pulse's own quantisation (sd 2.25 ns) and the PHY's timestamp
+  resolution set a floor ts2phc cannot filter. Keep linreg only if a day of dashboard windows
+  shows thinner tails. Backup of the PI config: `/etc/linuxptp/ts2phc.conf.bak-20261023`.
 - `phc2sys@eth0.service` is **disabled** since 2026-09-26. It used to run
   `phc2sys -s CLOCK_REALTIME -c eth0`, pushing the disciplined system clock into the PHC,
   which put the slow PHC↔system transfer into the PHC's path. Measuring how far each PPS
