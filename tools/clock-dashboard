@@ -35,6 +35,7 @@ PUBLIC_SAMPLE_KEYS = (
     "rf_blocks", "spoof_state", "spoof_code",
     "ref_freq_live", "ref_freq_offset", "ref_freq_skew", "ref_drift_age_min",
     "holdover_us_per_day", "trim_turns", "mikes_sources",
+    "phc_pps_mean_ns", "phc_pps_sd_ns", "phc_pps_p95_ns", "phc_pps_max_ns",
     "mode", "survey_started", "survey_duration_hours", "survey_elapsed_hours",
     "survey_progress_percent", "survey_ready",
     "temps",
@@ -234,6 +235,27 @@ def value(raw: str) -> int | float | str | None:
         return None
     parsed = number(raw)
     return parsed if parsed is not None else raw
+
+
+def phc_residual(proc: subprocess.Popen, timeout: float) -> dict:
+    """PHC-vs-PPS residual from phc-pps-residual --json, or nothing if it did not measure."""
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        print("clock-dashboard: phc-pps-residual timed out", file=sys.stderr)
+        return {}
+    try:
+        data = json.loads(out)
+    except ValueError:
+        print(f"clock-dashboard: phc-pps-residual: {(err or out).strip()}", file=sys.stderr)
+        return {}
+    if "sd_ns" not in data:
+        print(f"clock-dashboard: phc-pps-residual: {data.get('error')}", file=sys.stderr)
+        return {}
+    return {"phc_pps_mean_ns": data["mean_ns"], "phc_pps_sd_ns": data["sd_ns"],
+            "phc_pps_p95_ns": data["p95_abs_ns"], "phc_pps_max_ns": data["max_abs_ns"]}
 
 
 def operating_mode(path: Path, now: datetime) -> dict:
@@ -580,6 +602,11 @@ def main() -> int:
     parser.add_argument("--temp-sensor", action="append", metavar="NAME=PATH", default=[],
                         help="extra temperature sensor beyond the kernel thermal zones, e.g. "
                              "rb=/sys/bus/w1/devices/28-.../temperature (repeatable)")
+    parser.add_argument("--phc-residual", default="phc-pps-residual",
+                        help="tool measuring how far each PPS lands from a PHC second, i.e. how "
+                             "well ts2phc holds the clock ptp4l serves; run alongside gpsstat "
+                             "(default: %(default)s; 'none' to skip)")
+    parser.add_argument("--phc-seconds", type=float, default=30.0)
     parser.add_argument("--retention-days", type=float, default=DEFAULT_RETENTION_DAYS)
     parser.add_argument("--timeout", type=float, default=45.0)
     args = parser.parse_args()
@@ -589,6 +616,13 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
     collected_at = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+    phc = None
+    if not args.input and args.phc_residual != "none":
+        try:
+            phc = subprocess.Popen([args.phc_residual, "--seconds", str(args.phc_seconds), "--json"],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except OSError as error:
+            print(f"clock-dashboard: {error}", file=sys.stderr)
     if args.input:
         output = args.input.read_text(encoding="utf-8")
         returncode = args.input_exit_code
@@ -607,6 +641,8 @@ def main() -> int:
 
     sample = parse_gpsstat(output, returncode, collected_at)
     sample.update(operating_mode(args.survey_meta, now))
+    if phc:
+        sample.update(phc_residual(phc, args.phc_seconds + 15))
     if temps := read_temperatures(args.temp_sensor):
         sample["temps"] = temps
     args.history.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""phc-pps-residual — how far each PPS lands from an exact PHC second, i.e. how well
+ts2phc holds the PHC that ptp4l serves.
+
+    phc-pps-residual [--seconds 60] [--device /dev/ptp0] [--json]
+
+Reads the PHY's external-timestamp events read-only. Each reader of a PHC gets its own
+event queue, so this runs alongside ts2phc and chrony without taking events from either.
+It does not enable the channel: with ts2phc stopped nothing arrives, and it says so.
+"""
+import argparse, json, os, select, struct, sys, time
+
+FMT, SZ = "qIIII I I", 32      # struct ptp_extts_event
+
+
+def stats(v):
+    n = len(v)
+    m = sum(v) / n
+    a = sorted(abs(x) for x in v)
+    return {"n": n, "mean_ns": round(m, 1),
+            "sd_ns": round((sum((x - m) ** 2 for x in v) / n) ** 0.5, 1),
+            "p95_abs_ns": a[min(n - 1, int(0.95 * n))], "max_abs_ns": a[-1]}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--seconds", type=float, default=60)
+    p.add_argument("--device", default="/dev/ptp0")
+    p.add_argument("--json", action="store_true", help="print one JSON object")
+    a = p.parse_args()
+
+    fd = os.open(a.device, os.O_RDONLY)
+    poll = select.poll()
+    poll.register(fd, select.POLLIN)
+    off, deadline = [], time.monotonic() + a.seconds
+    while (left := deadline - time.monotonic()) > 0:
+        if poll.poll(min(1000, left * 1000)):
+            buf = os.read(fd, SZ)
+            if len(buf) == SZ:
+                _, nsec, *_ = struct.unpack(FMT, buf)
+                off.append(nsec if nsec < 500_000_000 else nsec - 1_000_000_000)
+    os.close(fd)
+
+    # ts2phc is still converging after a restart, or the pulse is missing: neither is a
+    # residual worth publishing.
+    if len(off) < max(5, a.seconds / 2):
+        msg = {"n": len(off), "error": "too few PPS events (ts2phc stopped, or no pulse?)"}
+        print(json.dumps(msg) if a.json else f"phc-pps-residual: {msg['error']}, got {len(off)}")
+        return 1
+    s = stats(off)
+    if a.json:
+        print(json.dumps(s))
+    else:
+        print(f"{s['n']} pulses: mean {s['mean_ns']:+.1f} ns, sd {s['sd_ns']:.1f} ns, "
+              f"p95 |x| {s['p95_abs_ns']} ns, max |x| {s['max_abs_ns']} ns")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

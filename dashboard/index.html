@@ -40,7 +40,7 @@
     <div class="section-head"><h2>Timing history</h2><div class="ranges"><button data-range="30m">30m</button><button data-range="1h">1h</button><button data-range="6h">6h</button><button class="active" data-range="24h">24h</button><button data-range="7d">7d</button><button data-range="30d">30d</button><button data-range="1y">1y</button><button id="custom-btn" type="button" aria-expanded="false">custom</button><button id="smooth-btn" class="active" type="button" aria-pressed="true" title="Showing a rolling median so brief maintenance outliers do not flatten the useful scale. Select to show the raw samples.">smoothed</button></div></div>
     <form id="custom-range" class="custom-range" hidden><label>From<input id="range-from" type="datetime-local" step="60" required></label><label>To<input id="range-to" type="datetime-local" step="60" required></label><button type="submit">apply</button><button id="latest-btn" type="button">latest 24h</button></form>
     <section class="charts">
-      <div class="card chart"><div class="label">PPS phase & stability · nanoseconds</div><canvas id="timing-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">offset</span><span class="key" style="--key:var(--mint)">1σ scatter</span></div></div>
+      <div class="card chart"><div class="label">PPS phase & stability · nanoseconds</div><canvas id="timing-chart"></canvas><div class="legend"><span class="key" style="--key:var(--cyan)">offset</span><span class="key" style="--key:var(--mint)">1σ scatter</span><span class="key" style="--key:var(--amber)">PTP clock 1σ</span></div></div>
       <div class="card chart"><div class="label">Satellites</div><canvas id="sat-chart"></canvas><div class="legend"><span class="key" style="--key:var(--mint)">used</span><span class="key" style="--key:var(--muted)">seen</span></div></div>
       <div class="card chart"><div class="label">Reference oscillator frequency · parts per billion</div><canvas id="rb-chart"></canvas><div class="legend"><span class="key" style="--key:var(--amber)">AR-40A vs GNSS</span></div><p class="stat-note">Scale follows the observed range to make slow frequency drift visible.</p></div>
       <div class="card chart"><div class="label">Temperatures · °C</div><canvas id="temp-chart"></canvas><div id="temp-legend" class="legend"></div><p class="stat-note">Kernel thermal zones inside the enclosure. Compare against the frequency trace above: with the case closed, the rubidium and the CM4 share one thermal volume, so load-driven warming can appear as reference drift.</p></div>
@@ -181,7 +181,7 @@ function render(){
     mikes0:finite(mikes[mikesNames[0]]?.offset_ns)?mikes[mikesNames[0]].offset_ns/1e3:undefined,
     mikes1:finite(mikes[mikesNames[1]]?.offset_ns)?mikes[mikesNames[1]].offset_ns/1e3:undefined,
     mikes2:finite(mikes[mikesNames[2]]?.offset_ns)?mikes[mikesNames[2]].offset_ns/1e3:undefined}});
-  const keys=['pps_offset_ns','pps_stddev_ns','receiver_tacc_ns','sats_seen','sats_used','jam0','jam1','rbppb','mikes0','mikes1','mikes2',...tempNames.map((_,i)=>`temp${i}`)];
+  const keys=['pps_offset_ns','pps_stddev_ns','phc_pps_sd_ns','receiver_tacc_ns','sats_seen','sats_used','jam0','jam1','rbppb','mikes0','mikes1','mikes2',...tempNames.map((_,i)=>`temp${i}`)];
   const win=medianWindow(base.length),rows=smooth?medianRows(base,keys,win):base;
   const btn=$('#smooth-btn');btn.classList.toggle('active',smooth);btn.setAttribute('aria-pressed',String(smooth));
   let label=smooth?'smoothed':'raw data';
@@ -191,7 +191,7 @@ function render(){
     if(smooth)label+=winMin>=60?` · ${fmt(winMin/60,1)} h`:` · ${winMin} min`;
   }
   btn.textContent=label;btn.title=smooth?'Showing a rolling median so brief maintenance outliers do not flatten the useful scale. Select to show the raw samples.':'Showing every recorded sample. Select to restore the rolling-median view.';
-  lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')}],'symmetric');
+  lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')},{key:'phc_pps_sd_ns',color:css('--amber')}],'symmetric');
   lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);
   lineChart($('#receiver-chart'),rows,[{key:'receiver_tacc_ns',color:css('--cyan'),points:true}]);
   lineChart($('#rf-chart'),rows,[{key:'jam0',color:css('--amber')},{key:'jam1',color:css('--cyan')}]);

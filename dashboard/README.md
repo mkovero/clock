@@ -126,6 +126,13 @@ Values above 200 are read as millidegrees, which covers kernel thermal zones, hw
 estimate` is ZED-F9T `NAV-TIMEGPS.tAcc`. `Max-error bound` is root dispersion plus
 half root delay, as calculated by `gpsstat`.
 
+`PTP clock 1σ` (amber, on the PPS chart) is how far each pulse lands from an exact second
+of the PHY clock that ptp4l serves, over 30 s per collection: how well ts2phc holds the
+PTP grandmaster, not the system clock. The collector runs `phc-pps-residual` alongside
+`gpsstat`, reading the PHC's timestamp events read-only, so neither ts2phc nor chrony
+loses any. It is archived as `phc_pps_{mean,sd,p95,max}_ns`. ts2phc itself runs at
+`-l 5` and does not log its per-second offsets.
+
 None of those is a measurement of constant absolute bias. Chrony compares the system
 clock with PPS and then steers that clock to PPS, so fixed antenna, receiver, cable,
 and timestamping delays disappear into the correction. The dashboard says this

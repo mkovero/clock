@@ -2,6 +2,8 @@
 """Focused regression tests for the dashboard collector."""
 
 import importlib.util
+import subprocess
+import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
@@ -72,6 +74,23 @@ class HoldoverLabelTest(unittest.TestCase):
 
     def test_legacy_label_still_parses(self):
         self.assertEqual(self._parse(self.LEGACY)["holdover_us_per_day"], 259.2)
+
+
+class PhcResidualTest(unittest.TestCase):
+    @staticmethod
+    def _run(stdout: str) -> dict:
+        proc = subprocess.Popen([sys.executable, "-c", f"print({stdout!r})"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return dashboard.phc_residual(proc, 10)
+
+    def test_measurement_maps_to_sample_keys(self):
+        got = self._run('{"n": 29, "mean_ns": -1.3, "sd_ns": 6.1, "p95_abs_ns": 13, "max_abs_ns": 14}')
+        self.assertEqual(got, {"phc_pps_mean_ns": -1.3, "phc_pps_sd_ns": 6.1,
+                               "phc_pps_p95_ns": 13, "phc_pps_max_ns": 14})
+        self.assertTrue(set(got) <= set(dashboard.PUBLIC_SAMPLE_KEYS))
+
+    def test_no_pulses_adds_nothing(self):
+        self.assertEqual(self._run('{"n": 0, "error": "too few PPS events"}'), {})
 
 
 if __name__ == "__main__":

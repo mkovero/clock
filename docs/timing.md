@@ -95,7 +95,7 @@ handles that through gpsd.
 
 - `ptp4l@eth0.service` runs ptp4l as grandmaster from `/etc/linuxptp/ptp4l.conf`.
   Arch's linuxptp package ships no systemd units, so these are local.
-- `ts2phc@eth0.service` runs `ts2phc -f /etc/linuxptp/ts2phc.conf -s generic -c eth0`
+- `ts2phc@eth0.service` runs `ts2phc -f /etc/linuxptp/ts2phc.conf -s generic -c eth0 -l 5`
   and disciplines the PHC **directly from the same PPS events** the PHY timestamps.
   `-s generic` means a pulse without time of day, so only the sub-second part is
   corrected and the whole seconds (TAI) are left alone. Config:
@@ -114,6 +114,10 @@ handles that through gpsd.
   The `UTC-TAI offset not set in system! Trying to revert to leapfile` line at startup is
   expected — the kernel's TAI offset is 0 because chrony is not configured with
   `leapsectz`, so ts2phc uses the file instead.
+  `-l 5` (notice) drops ts2phc's once-a-second `offset` lines, which would put 86 400 lines a
+  day into the persistent journal on the eMMC. The PHC's quality is measured instead by
+  `tools/phc-pps-residual`, which the dashboard collector runs every 5 minutes; on demand,
+  2026-10-23: sd 6.2 ns over 90 s, with 30 s windows ranging sd 6–8 ns and one at 21 ns.
 - `phc2sys@eth0.service` is **disabled** since 2026-09-26. It used to run
   `phc2sys -s CLOCK_REALTIME -c eth0`, pushing the disciplined system clock into the PHC,
   which put the slow PHC↔system transfer into the PHC's path. Measuring how far each PPS

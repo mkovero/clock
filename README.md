@@ -104,7 +104,7 @@ structure, not the mount, and it is why PPP cannot resolve ambiguities here
 | Path | Contents |
 |---|---|
 | `5351.ino` | Teensy 4.0 firmware: Si5351C setup, CLK4 gating, status reporting |
-| `tools/` | CM4-side scripts: `gpsstat` health check, receiver config (`ubx-apply-config`, `ubx-dump-config`, `f9t-restore`), survey and raw logging (`f9t-survey`, `f9t-rawlog`), dashboard collector, `f9t-skymap`, `rb-freq-live`, `rb-adev`, `qerr-vs-extts` |
+| `tools/` | CM4-side scripts: `gpsstat` health check, receiver config (`ubx-apply-config`, `ubx-dump-config`, `f9t-restore`), survey and raw logging (`f9t-survey`, `f9t-rawlog`), dashboard collector, `f9t-skymap`, `rb-freq-live`, `rb-adev`, `qerr-vs-extts`, `phc-pps-residual` (how well ts2phc holds the PTP clock) |
 | | PPP and time-transfer tools, run on a workstation: `f9t-ppp` (UBX to RINEX), `rinex-filter` (constellation and C/N0 filter before CSRS), `ubx-timtp` (pulse quantisation error), `ubx-rxclock` (receiver clock bias), `ppp-clk-adev`, `ppp-vs-utcmike` (pulse against GPS and UTC(MIKE) via the BIPM's public files) |
 | `dashboard/` | static status page and its deployment notes |
 | `config/` | ZED-F9T applied changes, `chrony.conf`, the AR-40A trim log, dated reminders (`f9t-reminders` for gpsstat, `milestones.json` for the dashboard). Anything carrying the position is kept private ([why](config/README.md)) |
