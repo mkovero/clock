@@ -305,6 +305,18 @@ assumption is not a self-check.
      position. `rinex-filter` now keeps it by default (`--drop-approx` to remove).
      The +0.34 m up is inside the 95 % sigma (0.17–0.21 m per axis) plus the missing APC and
      ocean loading, but worth watching. Resubmit GE35 once CSRS serves finals.
+   - **First tie of the new position (10-19/20 session, RTKLIB with ESA rapid `ESA0OPSRAP`,
+     2026-10-23; CSRS was offline).** Same settings as the 10-03 runs:
+
+     | Run | Epochs | Final position vs configured (E / N / U) | PPS − GPS, after 6 h |
+     |---|---|---|---|
+     | GPS, full RINEX | 177/2887 | +0.13 / −0.23 / −0.16 m | **−2.1 ns**, sd 3.5, drift +0.6 ns/day |
+     | GPS+Galileo, GE35 | 263/2887 | +0.29 / −0.32 / −0.01 m | −3.1 ns, sd 3.5, drift +1.4 ns/day |
+
+     The GPS-only run is the like-for-like comparison with 10-03 (+0.7 ns): it moved by −2.8 ns,
+     against −2.7 ns predicted for removing the old position's leak. GPS+Galileo on the full
+     RINEX returned exactly the GPS-only solution, so Galileo did not enter that run. Coverage is
+     as thin as on 10-03, and these are rapid products; redo on ESA finals (~11-05).
 6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply
    the comparison is good to nanoseconds.
 
