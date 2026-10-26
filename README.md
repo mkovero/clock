@@ -66,8 +66,10 @@ ESA final products, since 2026-10-09). Its TIME1 pulse, the output whose quantis
 `UBX-TIM-TP` reports, is timestamped by the CM4's BCM54210PE PHY. chrony reads that timestamp as
 its `PPS2` refclock and uses gpsd's NMEA only to label which second each pulse belongs
 to. The same pulse events also discipline the PHC directly through ts2phc, which ptp4l serves
-as grandmaster (sd 6 ns, against 137 ns when the PHC was copied from the system clock by
-phc2sys). Three MIKES NTP servers act as a millisecond-level sanity check.
+as grandmaster (sd ~9 ns, against 137 ns when the PHC was copied from the system clock by
+phc2sys). The PHY's own crystal is load-sensitive: heavy CPU or eMMC work on the CM4 moves
+the PTP clock by tens of ns, so periodic jobs there are kept light. Three MIKES NTP servers
+act as a millisecond-level sanity check.
 
 **Power.** A MeanWell RS-15-5 feeds three separate 5 V runs (CM4, Si5351 + Teensy, F9T).
 The AR-40A has its own 15 V supply, and its negative rail is deliberately not tied to
@@ -75,22 +77,26 @@ the 5 V one.
 
 ## Typical performance
 
-Week of 2026-10-16 to 10-23, from the dashboard history (median, 5–95 % in brackets). The
+Week of 2026-10-19 to 10-26, from the dashboard history (median, 5–95 % in brackets). The
 dashboard has live values.
 
 | Quantity | Value |
 |---|---|
 | chrony | stratum 1, `PPS2` selected throughout |
-| PPS2 jitter (chrony std dev) | 11 ns (10–14) |
+| PPS2 jitter (chrony std dev) | 11 ns (9–13) |
+| PTP clock vs PPS (30 s windows, sd) | 9.0 ns (6.8–11.9) |
 | Receiver time accuracy (`tAcc`) | 1 ns (1–2) |
 | Satellites | 19 used (15–23) / 37 seen (33–41), GPS, Galileo, BeiDou; PDOP 0.97 |
 | chrony max-error bound | 32 µs (25–40) |
-| AR-40A offset vs GNSS | +5.7×10⁻¹¹ (4.4–6.9), skew 1.7×10⁻¹¹ |
+| AR-40A offset vs GNSS | +5.7×10⁻¹¹ (4.7–6.8), skew 1.8×10⁻¹¹ |
 | Frequency resolution of the rig | a few ×10⁻¹² over hours |
 
-**Absolute time.** Against GPS time as an independent PPP solution realises it, the pulse
-sits at **PPS − GPS = −2.1 ns, sd 3.5 ns** (2026-10-19/20 session, ESA rapid products;
-[how](docs/pulse-to-gps-tie.md)). That excludes the antenna, LNA and cable delay, which is
+**Absolute time.** Against GPS time as PPP realises it, the pulse sits at **PPS − GPS ≈ −2
+to −6 ns** on the current position (2026-10-19/20 session, sd 3.5–7 ns). The two PPP solvers
+disagree by ~3 ns: RTKLIB with ESA rapid products gives −2.1 ns, NRCan CSRS-PPP −5.6 ns, and
+the gap is between their receiver-clock solutions, not in the pulse
+([details](docs/pulse-to-gps-tie.md)). Final products for both, due in early November, should
+narrow it. Either way the figure excludes the antenna, LNA and cable delay, which is
 unmeasured and larger than the tie itself. See
 [docs/timing.md](docs/timing.md#bias-and-error-budget).
 
