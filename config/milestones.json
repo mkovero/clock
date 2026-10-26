@@ -40,16 +40,18 @@
     "done": true
   },
   {
-    "at": "2026-10-23T12:00:00Z",
-    "what": "CSRS finals for 2026-10-03: submit ~/ppp/2026-10-03/rinex/aika-20261004-0237-GE35a.obs.gz (ITRF, static). Use it only if the products line says EMR0MGBFIN; still RAP means wait a few days and retry"
+    "at": "2026-10-26T12:00:00Z",
+    "done": true,
+    "what": "CSRS finals for 2026-10-03 (EMR0MGBFIN, ocean loading applied): position 7 cm horizontal, +0.35 m up from the configured one; PPS − GPS +0.3 ns, sd 4.8, same as the rapid result"
   },
   {
-    "at": "2026-10-23T12:00:00Z",
-    "what": "CSRS rapid for the 10-19 session: submit ~/ppp/2026-10-19/rinex/aika-20261020-2351-GE35.obs.gz (ITRF, static). Products line should say EMR0MGBRAP; first tie of the 10-09 position"
+    "at": "2026-10-26T12:00:00Z",
+    "done": true,
+    "what": "CSRS rapid for the 10-19 session, first CSRS tie of the 10-09 position: PPS − GPS −5.6 ns, sd 7.2. RTKLIB says −2.1; the 3 ns gap is between the two solvers' clocks (CSRS applies code biases), not in the pulse"
   },
   {
     "at": "2026-11-05T12:00:00Z",
-    "what": "CSRS finals for the 10-19 session: resubmit aika-20261020-2351-GE35.obs.gz, use only if products say EMR0MGBFIN"
+    "what": "CSRS finals for the 10-19 session: resubmit aika-20261020-2351-GE35.obs.gz (use only if products say EMR0MGBFIN), and rerun RTKLIB on ESA finals, to see whether the 3 ns solver gap survives finals"
   },
   {
     "at": "2026-11-15T00:00:00Z",

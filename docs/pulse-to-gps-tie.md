@@ -317,6 +317,24 @@ assumption is not a self-check.
      against −2.7 ns predicted for removing the old position's leak. GPS+Galileo on the full
      RINEX returned exactly the GPS-only solution, so Galileo did not enter that run. Coverage is
      as thin as on 10-03, and these are rapid products; redo on ESA finals (~11-05).
+   - **CSRS results, 2026-10-26**, both from `rinex-filter` output with APPROX POSITION kept,
+     so ocean loading (FES2014b) is now applied:
+
+     | Submission | Products | Epochs | dE | dN | dU | PPS − GPS |
+     |---|---|---|---|---|---|---|
+     | 10-03 GE35a | finals `EMR0MGBFIN` | 1974/3019 | −0.02 m | −0.07 m | +0.35 m | +0.3 ns, sd 4.8, drift −2.1 ns/day |
+     | 10-19 GE35 | rapid `EMR0MGBRAP` | 1891/2885 | +0.21 m | −0.24 m | +0.44 m | **−5.6 ns**, sd 7.2, drift +4.0 ns/day |
+
+     Finals confirm the 10-03 rapid result (+0.3 against −0.3 ns). On 10-19, CSRS and RTKLIB
+     agree on the horizontal position (RTKLIB GE35: +0.29 / −0.32 m), and both put it ~0.3 m
+     from the configured value, within the session-to-session scatter of this sky. CSRS again
+     sits ~0.4 m higher than RTKLIB. The ties differ by ~3 ns (−5.6 against −2.1 / −3.1), and
+     differencing the two receiver-clock solutions on common epochs shows the gap is in the
+     solvers, not the pulse: **CSRS clock − RTKLIB clock = +3.6 ns (GPS) / +3.0 ns (GE35), sd
+     2.5**. The likeliest cause is code biases: CSRS applies the products' OSB files, RTKLIB
+     here applies none. So the new position's tie is −2 to −6 ns depending on the solver's
+     clock datum, and the session-to-session move is −2.8 ns (RTKLIB) or −5.9 ns (CSRS) against
+     −2.7 ns predicted. Finals for both, ~11-05, decide whether the gap is products or biases.
 6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply
    the comparison is good to nanoseconds.
 
