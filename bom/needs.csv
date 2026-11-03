@@ -1,0 +1,4 @@
+mpn,manufacturer,supplier,supplier_pn,qty,refs,board,status,order_ref,note
+,generic,mouser,,1,BNC tee,bench,need,,for DA/Orion load measurement (plan.md Step 4)
+,generic,mouser,,2,BNC male plug,bench,need,,bodies for home-made 75/50 Ω terminators (resistors on hand/measured)
+NanoVNA-H4 (or similar),,other,,1,VNA/TDR,bench,need,,antenna/cable delay (sys aika2arch/bench-todo.md §4)
