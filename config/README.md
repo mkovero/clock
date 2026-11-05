@@ -35,3 +35,4 @@ needs no copy here.
 | `f9t-timing-changes.txt` | receiver changes applied since the 2026-09-10 baseline, with reasons |
 | `ar40a-trim-log.txt` | every move of the AR-40A mechanical trimmer |
 | `f9t-reminders` | date-gated reminders surfaced by `gpsstat` |
+| `rtklib-ppp-{gps,ge}.conf` | rnx2rtkp static PPP settings for the pulse-to-GPS tie; feed `tools/rtklib-clk` |

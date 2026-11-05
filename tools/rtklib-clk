@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""rtklib-clk -- turn an RTKLIB PPP solution-status file into RINEX CLOCK AR records for the tie.
+
+    rtklib-clk <run.pos.stat> -o run.clk [--obs session.obs[.gz]] [--after-hours 6]
+               [--station AIKA] [--pos run.pos --tmode f9t-ppp-position.txt]
+
+`ppp-vs-utcmike --timtp --clk --rxclock` reads PPP's receiver clock from the AR records of a RINEX
+CLOCK file, which is what CSRS-PPP returns. RTKLIB writes no such file; rnx2rtkp with
+`out-outstat = state` writes the clock to `<out>.pos.stat` as
+
+    $CLK,week,tow,stat,rcv,clk1,clk2,clk3,clk4        clk in ns, receiver clock - GPS time
+
+This tool rewrites those records as AR lines that pair with ubx-rxclock without interpolation.
+
+**Epoch tags.** CSRS tags AR records with the observation epochs, which are receiver time
+(RAWX rcvTow, e.g. 59.995 s), and ppp-vs-utcmike pairs on exactly that. RTKLIB tags its solution
+in GPS time instead: sol time = obs time - clock bias (e.g. 60.000 s for a -5.1 ms bias). So the
+receiver-time tag is recovered as tow + clk1, rounded to the whole-ms grid rcvTow sits on. Done in
+integer ms per week: seconds since 1980 in a double resolve only ~238 ns (docs/pulse-to-gps-tie.md),
+which is harmless after rounding to ms but is not worth relying on.
+
+**Convergence.** --after-hours drops records less than that long after the start, the "after 6 h"
+of every RTKLIB tie in docs/pulse-to-gps-tie.md. The start is the RINEX TIME OF FIRST OBS when
+--obs is given, else the first $CLK record. They differ when RTKLIB takes hours to produce a first
+solution (GPS-only on this sky: 2.4 h on 2026-10-19), so pass --obs for like-for-like numbers.
+
+**Position.** With --pos and --tmode, prints the run's last position against the receiver's
+configured CFG-TMODE position as E / N / U metres. Only the offsets are printed; the coordinates
+stay out of the output (the repo is public).
+
+Settings used for the ties so far, rnx2rtkp 2.4.3 b34 with the SP3 fix in ~/ppp/RTKLIB on ai:
+ppp-static, l1+l2, forward, elmask 15, dual-freq iono, est-ztdgrad, precise eph, posopt1-5 on,
+armode off, out-solstatic all, out-outstat state, IGS20 ANTEX for satellite and receiver,
+navsys 1 (GPS) or 9 (GPS+Galileo): config/rtklib-ppp-{gps,ge}.conf, run from a directory with
+products/igs20.atx.
+"""
+
+import argparse
+import datetime
+import gzip
+import math
+import sys
+
+GPS_EPOCH = datetime.datetime(1980, 1, 6)
+WEEK_MS = 604800 * 1000
+
+
+def read_clk_records(path):
+    """[(week, tow_ms_in_gps_time, clk_ns)] from the $CLK lines of an RTKLIB .stat file."""
+    rows = []
+    for line in open(path, errors="replace"):
+        if not line.startswith("$CLK,"):
+            continue
+        f = line.split(",")
+        sec, _, frac = f[2].partition(".")
+        tow_ms = int(sec) * 1000 + int((frac + "000")[:3])
+        rows.append((int(f[1]), tow_ms, float(f[5])))
+    return rows
+
+
+def first_obs(path):
+    """TIME OF FIRST OBS from a RINEX observation header, as a datetime (receiver time)."""
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", errors="replace") as handle:
+        for line in handle:
+            if "TIME OF FIRST OBS" in line:
+                f = line.split()
+                return datetime.datetime(*map(int, f[:5])) + datetime.timedelta(seconds=float(f[5]))
+            if "END OF HEADER" in line:
+                break
+    sys.exit(f"{path}: no TIME OF FIRST OBS in the header")
+
+
+def tmode_ecef(path):
+    """CFG-TMODE LAT/LON/HEIGHT (+ _HP) from a ubx-dump-config style keyfile, as WGS84 ECEF."""
+    k = {}
+    for line in open(path):
+        f = line.split()
+        if len(f) >= 2 and f[0].startswith("CFG-TMODE-"):
+            k[f[0][len("CFG-TMODE-"):]] = float(f[1])
+    try:
+        lat = math.radians(k["LAT"] * 1e-7 + k.get("LAT_HP", 0) * 1e-9)
+        lon = math.radians(k["LON"] * 1e-7 + k.get("LON_HP", 0) * 1e-9)
+        h = k["HEIGHT"] * 1e-2 + k.get("HEIGHT_HP", 0) * 1e-4
+    except KeyError as missing:
+        sys.exit(f"{path}: no CFG-TMODE-{missing.args[0]} (needs LLH, not ECEF, keys)")
+    a, e2 = 6378137.0, 6.69437999014e-3
+    n = a / math.sqrt(1 - e2 * math.sin(lat) ** 2)
+    xyz = ((n + h) * math.cos(lat) * math.cos(lon),
+           (n + h) * math.cos(lat) * math.sin(lon),
+           (n * (1 - e2) + h) * math.sin(lat))
+    return xyz, lat, lon
+
+
+def last_position(path):
+    """Last ECEF solution from an rnx2rtkp .pos written with out-solformat = xyz."""
+    last = None
+    for line in open(path):
+        if line.startswith("%") or not line.strip():
+            continue
+        last = line.split()
+    if last is None:
+        sys.exit(f"{path}: no solutions")
+    return tuple(float(v) for v in last[2:5])
+
+
+def enu(d, lat, lon):
+    sl, cl, so, co = math.sin(lat), math.cos(lat), math.sin(lon), math.cos(lon)
+    return (-so * d[0] + co * d[1],
+            -sl * co * d[0] - sl * so * d[1] + cl * d[2],
+            cl * co * d[0] + cl * so * d[1] + sl * d[2])
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("stat", help="rnx2rtkp solution status file (<out>.pos.stat, out-outstat = state)")
+    p.add_argument("-o", "--out", required=True, help="RINEX CLOCK file to write")
+    p.add_argument("--obs", help="the RINEX obs file the run used; its TIME OF FIRST OBS starts --after-hours")
+    p.add_argument("--after-hours", type=float, default=0.0, help="drop records this soon after the start")
+    p.add_argument("--station", default="AIKA", help="station id written into the AR records")
+    p.add_argument("--pos", help="rnx2rtkp .pos (xyz) of the same run, for the position offset")
+    p.add_argument("--tmode", help="keyfile with the configured CFG-TMODE position, e.g. f9t-ppp-position.txt")
+    a = p.parse_args()
+
+    if a.pos and a.tmode:
+        x0, lat, lon = tmode_ecef(a.tmode)
+        x = last_position(a.pos)
+        e, n, u = enu([x[i] - x0[i] for i in range(3)], lat, lon)
+        print(f"{a.pos}: last position vs configured E / N / U  {e:+.2f} / {n:+.2f} / {u:+.2f} m")
+    elif a.pos or a.tmode:
+        sys.exit("--pos and --tmode go together")
+
+    rows = read_clk_records(a.stat)
+    if not rows:
+        sys.exit(f"{a.stat}: no $CLK records; was rnx2rtkp run with out-outstat = state?")
+
+    # receiver-time tag on the whole-ms grid: GPS-time tag + bias
+    tagged = []
+    for week, tow_ms, clk_ns in rows:
+        rx_ms = week * WEEK_MS + tow_ms + round(clk_ns / 1e6)
+        tagged.append((GPS_EPOCH + datetime.timedelta(milliseconds=rx_ms), clk_ns))
+
+    start = first_obs(a.obs) if a.obs else tagged[0][0]
+    cutoff = start + datetime.timedelta(hours=a.after_hours)
+    kept = [(t, c) for t, c in tagged if t >= cutoff]
+
+    with open(a.out, "w") as out:
+        out.write(f"{'3.04':>9}{'':11}{'C':<20}{'G':<20}RINEX VERSION / TYPE\n")
+        out.write(f"{'rtklib-clk ' + a.stat[-49:]:<60}COMMENT\n")
+        out.write(f"{'':60}END OF HEADER\n")
+        for t, clk_ns in kept:
+            sec = t.second + t.microsecond / 1e6
+            out.write(f"AR {a.station:<4} {t.year:4d} {t.month:02d} {t.day:02d} {t.hour:02d} {t.minute:02d}"
+                      f" {sec:9.6f}  1   {clk_ns * 1e-9:.12e}\n")
+
+    source = "TIME OF FIRST OBS" if a.obs else "first $CLK record"
+    print(f"{a.stat}: {len(rows)} $CLK records, first {tagged[0][0]}, last {tagged[-1][0]} (receiver time)")
+    print(f"wrote {len(kept)} AR records to {a.out}, from {cutoff} ({a.after_hours:g} h after {source})")
+    if not kept:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
