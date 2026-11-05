@@ -51,7 +51,12 @@
   },
   {
     "at": "2026-11-05T12:00:00Z",
-    "what": "CSRS finals for the 10-19 session: resubmit aika-20261020-2351-GE35.obs.gz (use only if products say EMR0MGBFIN), and rerun RTKLIB on ESA finals, to see whether the 3 ns solver gap survives finals"
+    "done": true,
+    "what": "RTKLIB on ESA finals for the 10-19 session: PPS − GPS −2.2 ns sd 3.6 (GPS), −3.3 ns sd 4.3 (GE35), same as on rapid, so ESA products are not the gap. CSRS resubmitted the same day and still served rapid (EMR0MGBRAP), with results identical to 10-26"
+  },
+  {
+    "at": "2026-11-12T12:00:00Z",
+    "what": "CSRS finals for the 10-19 session: resubmit aika-20261020-2351-GE35.obs.gz (use only if products say EMR0MGBFIN), to see whether the 3 ns solver gap against RTKLIB (−2.2 ns on ESA finals) survives finals"
   },
   {
     "at": "2026-11-15T00:00:00Z",
