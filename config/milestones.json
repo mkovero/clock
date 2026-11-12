@@ -56,7 +56,8 @@
   },
   {
     "at": "2026-11-12T12:00:00Z",
-    "what": "CSRS finals for the 10-19 session: resubmit aika-20261020-2351-GE35.obs.gz (use only if products say EMR0MGBFIN), to see whether the 3 ns solver gap against RTKLIB (−2.2 ns on ESA finals) survives finals"
+    "done": true,
+    "what": "CSRS finals (EMR0MGBFIN) for the 10-19 session: PPS − GPS −3.2 ns sd 7.1, position unchanged from rapid, clock −2.4 ns from rapid. CSRS − RTKLIB clock now +0.9 / −0.8 ns: the 3 ns gap was CSRS rapid products. New position's tie: −2 to −3 ns"
   },
   {
     "at": "2026-11-15T00:00:00Z",

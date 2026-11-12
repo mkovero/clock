@@ -92,11 +92,10 @@ dashboard has live values.
 | Frequency resolution of the rig | a few ×10⁻¹² over hours |
 
 **Absolute time.** Against GPS time as PPP realises it, the pulse sits at **PPS − GPS ≈ −2
-to −6 ns** on the current position (2026-10-19/20 session, sd 3.5–7 ns). The two PPP solvers
-disagree by ~3 ns: RTKLIB with ESA rapid products gives −2.1 ns, NRCan CSRS-PPP −5.6 ns, and
-the gap is between their receiver-clock solutions, not in the pulse
-([details](docs/pulse-to-gps-tie.md)). Final products for both, due in early November, should
-narrow it. Either way the figure excludes the antenna, LNA and cable delay, which is
+to −3 ns** on the current position (2026-10-19/20 session, final products, sd 3.6–7 ns).
+RTKLIB with ESA finals gives −2.2 ns (GPS) and −3.3 ns (GPS+Galileo), NRCan CSRS-PPP finals
+−3.2 ns; the two solvers' clocks agree to ~1 ns. The 3 ns gap seen earlier was CSRS's rapid
+products ([details](docs/pulse-to-gps-tie.md)). Either way the figure excludes the antenna, LNA and cable delay, which is
 unmeasured and larger than the tie itself. See
 [docs/timing.md](docs/timing.md#bias-and-error-budget).
 

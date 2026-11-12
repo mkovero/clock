@@ -335,6 +335,31 @@ assumption is not a self-check.
      here applies none. So the new position's tie is −2 to −6 ns depending on the solver's
      clock datum, and the session-to-session move is −2.8 ns (RTKLIB) or −5.9 ns (CSRS) against
      −2.7 ns predicted. Finals for both, ~11-05, decide whether the gap is products or biases.
+   - **Finals for the 10-19 session (RTKLIB 2026-11-05, CSRS 2026-11-12): the gap was CSRS's
+     rapid products, not code biases.** RTKLIB with ESA finals (`ESA0OPSFIN`), settings in
+     `config/rtklib-ppp-{gps,ge}.conf`, clock via `tools/rtklib-clk`, 6 h from the first
+     observation. CSRS on the same GE35 file as 10-26; it still served rapid on 11-05 and
+     finals by 11-12.
+
+     | Run | Products | Epochs | dE | dN | dU | PPS − GPS |
+     |---|---|---|---|---|---|---|
+     | RTKLIB GPS, full RINEX | ESA finals | 176 | +0.11 m | −0.20 m | −0.07 m | **−2.2 ns**, sd 3.6, drift +0.2 ns/day |
+     | RTKLIB GPS+Galileo, GE35 | ESA finals | 1498 | +0.19 m | −0.13 m | +0.04 m | −3.3 ns, sd 4.3, drift +5.5 ns/day |
+     | CSRS GE35 | `EMR0MGBFIN` | 1891/2885 | +0.21 m | −0.24 m | +0.44 m | **−3.2 ns**, sd 7.1, drift +2.3 ns/day |
+
+     ESA finals reproduce the rapid RTKLIB numbers (−2.1 → −2.2 ns). The CSRS position is
+     unchanged from rapid to the centimetre, but its clock moved by **−2.4 ns, sd 0.8** on all
+     1891 epochs: a datum offset between NRCan's rapid and final clock products. CSRS final −
+     RTKLIB final clock on common epochs is now **+0.9 ns (GPS, sd 2.8) / −0.8 ns (GE35, sd
+     6.4)**, so the two solvers agree to about 1 ns. Code biases (applied by CSRS, not by
+     RTKLIB) are worth at most that much here. GE35 under RTKLIB solves 2043 epochs on finals
+     against 263 on rapid; the GPS run is unchanged, so the GE35 config or the rapid Galileo
+     products differed, and the 10-23 config was not kept.
+
+     **The new position's tie is −2 to −3 ns** (−2.2 / −3.3 RTKLIB, −3.2 CSRS). Against 10-03
+     finals (+0.7 RTKLIB GPS, +0.3 CSRS), the move is −2.9 ns (RTKLIB) and −3.5 ns (CSRS),
+     against −2.7 ns predicted for removing the old position's leak. Use finals for any CSRS
+     tie: on this session rapid was 2.4 ns off.
 6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply
    the comparison is good to nanoseconds.
 
