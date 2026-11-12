@@ -23,6 +23,8 @@ PPS_SANITY_NS = 1_000_000.0
 DEFAULT_RETENTION_DAYS = 365.0
 FULL_RESOLUTION_DAYS = 7
 QUARTER_HOUR_DAYS = 30
+# chrony writes its drift file hourly; older than this, the file predates the running chronyd.
+REF_DRIFT_MAX_AGE_MIN = 120
 # Keep structured measurements in the public, downsampled history.  The private
 # JSONL archive retains the complete gpsstat record; routine OK prose is omitted
 # here because repeating it thousands of times adds little diagnostic value.
@@ -211,6 +213,13 @@ def parse_gpsstat(text: str, returncode: int, collected_at: str) -> dict:
         if match:
             sample["spoof_state"] = match.group(1)
             sample["spoof_code"] = int(match.group(2))
+
+    # chrony rewrites its drift file hourly. After an outage the first samples read the file
+    # the previous chronyd left behind: on 2026-10-31 it was 6523 min old, and that value went
+    # into the history as though it were current. Keep the age for the record, drop the value.
+    if sample.get("ref_drift_age_min", 0) > REF_DRIFT_MAX_AGE_MIN:
+        sample.pop("ref_freq_offset", None)
+        sample.pop("ref_freq_skew", None)
 
     return sample
 

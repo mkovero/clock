@@ -94,26 +94,38 @@ function lineChart(canvas, rows, series, scale='zero'){
 // Window has to outlast a run, not just a point. A run of k consecutive outliers
 // survives any window shorter than 2k+1, and real excursions here last several
 // samples — the 2026-09-11 second-numbering incident was three in a row (46000,
-// 1040, 597 ns). Sizing purely by sample count gave a window of 3 on a short
-// history, which removes nothing from a run of 3. Floor it at 7 so even a young
-// archive gets a usable window, and let it grow with the span after that.
-function medianWindow(n){const w=Math.max(7,Math.round(n/16));return Math.min(41,w%2?w:w+1)}
-function medianRows(rows,keys,win){
-  const out=rows.map(row=>({...row}));
+// 1040, 597 ns). The floor of 35 min is seven 5-minute samples.
+//
+// The window is a span of TIME, not a count of samples. The published history is
+// 5-minute for the last 7 days, 15-minute to 30 days and hourly beyond, so a fixed
+// sample count smoothed the older part three times longer than the newest week: on
+// the 30d view the last week looked three times noisier, which read as the rubidium
+// getting worse after the 2026-10-31 restart when only the resolution had changed.
+// The cap keeps the 24h and 7d views as they were (≤ 205 min) and grows for long
+// ranges (6 h at 30 days, 3 days at a year).
+function medianSpanMs(spanMs){return Math.min(Math.max(spanMs/16,35*6e4),Math.max(205*6e4,spanMs/120))}
+function medianRows(rows,keys,spanMs){
+  const out=rows.map(row=>({...row})),t=rows.map(row=>Date.parse(row.at)),half=spanMs/2;
+  const lowerBound=(x,lo,hi)=>{while(lo<hi){const m=(lo+hi)>>1;if(t[m]<x)lo=m+1;else hi=m}return lo};
   for(const key of keys){
-    // Filter each uninterrupted run separately. Counting empty rows as part of
-    // the window made the filter collapse around maintenance outages, while
-    // filling those rows drew a plausible-looking line where no data existed.
+    // Filter each uninterrupted run separately: a run ends at a missing value or at a
+    // gap in time longer than the window. Medians must not reach across an outage,
+    // and filling the outage would draw a plausible-looking line where no data existed.
     let start=0;
     while(start<rows.length){
       while(start<rows.length&&!finite(rows[start][key]))start++;
-      let end=start;while(end<rows.length&&finite(rows[end][key]))end++;
-      const length=end-start;if(!length)break;
-      const width=Math.min(win,length%2?length:Math.max(1,length-1)),half=(width-1)/2;
+      if(start>=rows.length)break;
+      let end=start+1;while(end<rows.length&&finite(rows[end][key])&&t[end]-t[end-1]<=spanMs)end++;
+      const ts=t[start],te=t[end-1];
       for(let i=start;i<end;i++){
-        const first=Math.max(start,Math.min(i-half,end-width));
-        const vals=rows.slice(first,first+width).map(row=>row[key]).sort((a,b)=>a-b);
-        out[i][key]=vals[half];
+        // Centred where possible; at a run's edge, slide inward so the window keeps its
+        // full span instead of shrinking to a handful of samples at "now".
+        let lo=t[i]-half,hi=t[i]+half;
+        if(lo<ts){hi=Math.min(te,hi+(ts-lo));lo=ts}
+        if(hi>te){lo=Math.max(ts,lo-(hi-te));hi=te}
+        const a=lowerBound(lo,start,end),b=lowerBound(hi+1,start,end);
+        const vals=[];for(let j=a;j<b;j++)vals.push(rows[j][key]);vals.sort((x,y)=>x-y);
+        out[i][key]=vals[(vals.length-1)>>1];
       }
       start=end;
     }
@@ -176,20 +188,18 @@ function render(){
     pps_stddev_ns:ppsOk(s.pps_stddev_ns)?s.pps_stddev_ns:undefined,
     jam0:(s.rf_blocks||[]).find(b=>b.id===0)?.jam_indicator,
     jam1:(s.rf_blocks||[]).find(b=>b.id===1)?.jam_indicator,
-    rbppb:finite(s.ref_freq_offset)?s.ref_freq_offset*1e9:undefined,
+    // A drift file older than ~2 h predates the running chronyd (the collector drops these
+    // since 2026-11-12; this keeps the ones already published out of the chart).
+    rbppb:finite(s.ref_freq_offset)&&!(s.ref_drift_age_min>120)?s.ref_freq_offset*1e9:undefined,
     ...Object.fromEntries(tempNames.map((name,i)=>[`temp${i}`,finite(s.temps?.[name])?s.temps[name]:undefined])),
     mikes0:finite(mikes[mikesNames[0]]?.offset_ns)?mikes[mikesNames[0]].offset_ns/1e3:undefined,
     mikes1:finite(mikes[mikesNames[1]]?.offset_ns)?mikes[mikesNames[1]].offset_ns/1e3:undefined,
     mikes2:finite(mikes[mikesNames[2]]?.offset_ns)?mikes[mikesNames[2]].offset_ns/1e3:undefined}});
   const keys=['pps_offset_ns','pps_stddev_ns','phc_pps_sd_ns','receiver_tacc_ns','sats_seen','sats_used','jam0','jam1','rbppb','mikes0','mikes1','mikes2',...tempNames.map((_,i)=>`temp${i}`)];
-  const win=medianWindow(base.length),rows=smooth?medianRows(base,keys,win):base;
+  const spanMs=medianSpanMs(chartEnd-chartStart),rows=smooth?medianRows(base,keys,spanMs):base;
   const btn=$('#smooth-btn');btn.classList.toggle('active',smooth);btn.setAttribute('aria-pressed',String(smooth));
   let label=smooth?'smoothed':'raw data';
-  if(base.length>1){
-    const spanMin=(new Date(base.at(-1).at)-new Date(base[0].at))/6e4;
-    const winMin=Math.round(spanMin/(base.length-1)*win);
-    if(smooth)label+=winMin>=60?` · ${fmt(winMin/60,1)} h`:` · ${winMin} min`;
-  }
+  if(smooth){const winMin=Math.round(spanMs/6e4);label+=winMin>=60?` · ${fmt(winMin/60,1)} h`:` · ${winMin} min`}
   btn.textContent=label;btn.title=smooth?'Showing a rolling median so brief maintenance outliers do not flatten the useful scale. Select to show the raw samples.':'Showing every recorded sample. Select to restore the rolling-median view.';
   lineChart($('#timing-chart'),rows,[{key:'pps_offset_ns',color:css('--cyan')},{key:'pps_stddev_ns',color:css('--mint')},{key:'phc_pps_sd_ns',color:css('--amber')}],'symmetric');
   lineChart($('#sat-chart'),rows,[{key:'sats_seen',color:css('--muted')},{key:'sats_used',color:css('--mint')}]);

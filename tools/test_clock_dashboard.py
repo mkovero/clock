@@ -76,6 +76,29 @@ class HoldoverLabelTest(unittest.TestCase):
         self.assertEqual(self._parse(self.LEGACY)["holdover_us_per_day"], 259.2)
 
 
+class StaleDriftFileTest(unittest.TestCase):
+    @staticmethod
+    def _parse(age_min):
+        text = "\n".join([
+            "reference oscillator (AR-40A)",
+            "  fractional frequency offset vs GNSS       : 5.6000e-11",
+            "  frequency uncertainty (chrony skew)       : 2.90e-11",
+            f"  drift file age                            : {age_min} min",
+        ])
+        return dashboard.parse_gpsstat(text, 0, "2026-10-31T12:15:00Z")
+
+    def test_current_file_is_kept(self):
+        got = self._parse(59)
+        self.assertEqual(got["ref_freq_offset"], 5.6e-11)
+        self.assertEqual(got["ref_freq_skew"], 2.9e-11)
+
+    def test_file_left_from_before_an_outage_is_dropped(self):
+        got = self._parse(6523)       # 2026-10-31, after 4.5 days down
+        self.assertNotIn("ref_freq_offset", got)
+        self.assertNotIn("ref_freq_skew", got)
+        self.assertEqual(got["ref_drift_age_min"], 6523)
+
+
 class PhcResidualTest(unittest.TestCase):
     @staticmethod
     def _run(stdout: str) -> dict:
