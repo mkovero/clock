@@ -61,6 +61,7 @@
   },
   {
     "at": "2026-11-15T00:00:00Z",
-    "what": "BIPM should have published mike2610.gpi — run the UTC(MIKE) comparison"
+    "done": true,
+    "what": "UTC(MIKE) comparison on mike2610.gpi, 10-19 session: PPS − UTC(MIKE) −4.9 ns (RTKLIB GPS), −5.8 (RTKLIB GE35), −6.4 (CSRS finals), before the uncalibrated LNA delay (d − 40 ns, est. 10–30 ns), which dominates (clock/docs/pulse-to-gps-tie.md)"
   }
 ]

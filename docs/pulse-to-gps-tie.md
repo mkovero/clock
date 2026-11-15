@@ -21,6 +21,9 @@ theirs gives our output against UTC(MIKE), with satellite errors largely common 
 else for the October session is in hand: see `../../sys/state.md` and
 `tools/ppp-vs-utcmike`.
 
+Done 2026-11-15: [−5 to −6 ns on the 10-19 session](#the-utcmike-number-2026-11-15), before
+`(d − 40 ns)`.
+
 ## The data that provoked it
 
 The 2026-10-03 session finally has a good PPP solution. Submitted a third time on 2026-10-08 and
@@ -363,10 +366,27 @@ assumption is not a self-check.
 6. Still open, and the dominant term: the LNA delay. Do not let a tidy nanosecond-level tie imply
    the comparison is good to nanoseconds.
 
+## The UTC(MIKE) number, 2026-11-15
+
+`mike2610.gpi` was published by 11-15 (MJD 61307..61345, `Cal_Id 1019-2023`). On the 10-19
+session, `ppp-vs-utcmike --timtp --clk --rxclock --fetch 2610` against each finals clock:
+
+| PPP clock | PPS − GPS | Matched 5-min epochs | PPS − UTC(MIKE) |
+|---|---|---|---|
+| RTKLIB GPS, ESA finals | −2.2 ns, sd 3.6 | 17 | **−4.9 ns**, sd 2.6 |
+| RTKLIB GPS+Galileo, GE35, ESA finals | −3.3 ns, sd 4.3 | 162 | **−5.8 ns**, sd 3.8 |
+| CSRS GE35, `EMR0MGBFIN` | −3.2 ns, sd 7.1 | 187 | **−6.4 ns**, sd 6.8 |
+
+**PPS − UTC(MIKE) = −5 to −6 ns + (d − 40 ns) + δ.** The three clocks agree to 1.5 ns.
+UTC(MIKE) − GPS time was about +3 ns over the session, which is what moves the −2 to −3 ns tie
+to −5 to −6. The `(d − 40 ns)` term, the uncalibrated LNA group delay estimated at 10–30 ns,
+is larger than the number itself, so this does not yet say which side of UTC(MIKE) the pulse
+is on. The 10-03 session (old position) has not been run against `mike2610.gpi`.
+
 ## Do not
 
-- Do not quote a UTC(MIKE) number without the `(d − 40 ns)` caveat attached. The tool prints it.
-  The October number needs `mike2610.gpi`, due mid-November.
+- Do not quote a UTC(MIKE) number without the `(d − 40 ns)` caveat attached. The tool prints
+  the caveat in words (uncompensated antenna, LNA, cable and receiver delays), not the term.
 - Do not read the ±0.0626 ppm residual of the old tool as a receiver or rubidium fault. It was the
   TCXO entering a calculation that did not subtract it.
 - Do not take `−qErr` alone as PPS − GPS. It is the pulse against the receiver's own clock
